@@ -37,9 +37,10 @@ interface CommandPaletteProps {
   onClose: () => void
 }
 
-const allTags = photoLoader.getAllTags()
-const allCameras = photoLoader.getAllCameras()
-const allLenses = photoLoader.getAllLenses()
+// 注意：manifest 由启动流程注入，模块求值早于注入，所以这些快照必须放到组件里读
+const getAllTagsSnapshot = () => photoLoader.getAllTags()
+const getAllCamerasSnapshot = () => photoLoader.getAllCameras()
+const getAllLensesSnapshot = () => photoLoader.getAllLenses()
 
 const BRACKET_CORNERS = [
   { cls: 'af-bracket-tl', tx: -22, ty: -22 },
@@ -121,6 +122,10 @@ export const CommandPalette = ({ isOpen, onClose }: CommandPaletteProps) => {
   const [selectedIndex, setSelectedIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+
+  const [allTags] = useState(getAllTagsSnapshot)
+  const [allCameras] = useState(getAllCamerasSnapshot)
+  const [allLenses] = useState(getAllLensesSnapshot)
 
   const updateTagFilterMode = useCallback(
     (mode: 'union' | 'intersection') => {
@@ -373,7 +378,19 @@ export const CommandPalette = ({ isOpen, onClose }: CommandPaletteProps) => {
     }
 
     return cmds
-  }, [t, gallerySetting, query, navigate, onClose, setGallerySetting, openViewer, updateTagFilterMode])
+  }, [
+    t,
+    gallerySetting,
+    query,
+    navigate,
+    onClose,
+    setGallerySetting,
+    openViewer,
+    updateTagFilterMode,
+    allTags,
+    allCameras,
+    allLenses,
+  ])
 
   // Filter commands based on query
   const filteredCommands = useMemo(() => {

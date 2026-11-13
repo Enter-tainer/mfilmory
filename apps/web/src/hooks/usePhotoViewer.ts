@@ -10,8 +10,11 @@ import { jotaiStore } from '~/lib/jotai'
 import { trackView } from '~/lib/tracker'
 import { getPhotoDateMs, getRangeEndMs, getRangeStartMs } from '~/modules/gallery/dateRangeUtils'
 import { PhotosContext } from '~/providers/photos-provider'
+import type { PhotoManifest } from '~/types/photo'
 
-const data = photoLoader.getPhotos()
+// 注意：不要在模块作用域读 photoLoader —— manifest 现在由启动流程 fetch 后注入，
+// 模块求值时机早于注入，模块级快照会永远是空数组。
+const getPhotosSnapshot = () => photoLoader.getPhotos()
 
 // 抽取照片筛选和排序逻辑为独立函数
 // Note: filter uses parsed-instant comparison via getPhotoDateMs, while sort
@@ -19,6 +22,7 @@ const data = photoLoader.getPhotos()
 // two orderings agree; they may diverge for EXIF strings carrying explicit
 // timezone offsets — filter intentionally honors viewer-local calendar day.
 const filterAndSortPhotos = (
+  sourcePhotos: PhotoManifest[],
   selectedTags: string[],
   selectedCameras: string[],
   selectedLenses: string[],
@@ -28,7 +32,7 @@ const filterAndSortPhotos = (
   tagFilterMode: 'union' | 'intersection' = 'union',
 ) => {
   // 根据 tags、cameras、lenses 和 ratings 筛选
-  let filteredPhotos = data
+  let filteredPhotos = sourcePhotos
 
   // Tags 筛选：根据模式进行并集或交集筛选
   if (selectedTags.length > 0) {
@@ -121,6 +125,7 @@ export const getFilteredPhotos = () => {
   // 直接从 jotaiStore 中读取当前状态
   const currentGallerySetting = jotaiStore.get(gallerySettingAtom)
   return filterAndSortPhotos(
+    getPhotosSnapshot(),
     currentGallerySetting.selectedTags,
     currentGallerySetting.selectedCameras,
     currentGallerySetting.selectedLenses,
@@ -144,6 +149,7 @@ export const usePhotos = () => {
 
   const masonryItems = useMemo(() => {
     return filterAndSortPhotos(
+      photoLoader.getPhotos(),
       selectedTags,
       selectedCameras,
       selectedLenses,
