@@ -1,7 +1,12 @@
 @import 'tailwindcss';
-@plugin '@tailwindcss/typography';
+/* 没用到 @tailwindcss/typography 的 `.prose`（全仓 0 处引用），但插件会无条件输出
+   14.5 KB 的规则；直接不引入。 */
 @plugin '@egoist/tailwindcss-icons';
-@plugin 'daisyui';
+/* daisyui 的 calendar 组件内置 vanilla-calendar-pro 样式（`.vc-*`），单文件 58–78 KB，
+   占首屏 CSS 的 18%，而站点用的是自己写的 DateRangePicker —— 排除掉。 */
+@plugin 'daisyui' {
+  exclude: calendar;
+}
 @plugin 'tailwind-scrollbar';
 @plugin 'tailwindcss-animate';
 @import 'tailwindcss-safe-area';
