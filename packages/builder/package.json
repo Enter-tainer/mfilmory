@@ -17,9 +17,7 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "@afilmory/og-renderer": "workspace:*",
     "@afilmory/typing": "workspace:*",
-    "@resvg/resvg-js": "2.6.2",
     "@vingle/bmp-js": "^0.2.5",
     "blurhash": "2.0.5",
     "c12": "4.0.0-rc.2",
@@ -31,7 +29,6 @@
     "heic-convert": "2.1.0",
     "heic-to": "1.6.6",
     "nunjucks": "3.2.4",
-    "satori": "catalog:",
     "sharp": "0.35.5",
     "thumbhash": "0.1.1"
   },

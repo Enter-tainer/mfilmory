@@ -1,382 +1,153 @@
 import { Buffer } from 'node:buffer'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
+import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import process from 'node:process'
 
-import type { Sharp } from 'sharp'
 import sharp from 'sharp'
 
+import { workdir } from '../packages/builder/src/path.js'
 import { buildTimePhotoLoader } from './photo-loader.js'
-import { renderSVGText, wrapSVGText } from './svg-text-renderer.js'
 
-// 获取最新的照片
-async function getLatestPhotos(count = 4) {
-  const photos = buildTimePhotoLoader.getPhotos()
+/**
+ * 站点级（首页）分享图。
+ *
+ * 与单张照片一样「照片直放」：一张横向照片满幅铺进 1200×630，不加底色、
+ * 不叠站名和标题。分享平台会在图下面原生渲染 og:title / og:description，
+ * 所以图里再画一遍文字只会把照片挤小。
+ */
 
-  // 按拍摄时间排序，获取最新的照片
-  const sortedPhotos = photos.sort((a, b) => {
-    if (!a?.exif?.DateTimeOriginal || !b?.exif?.DateTimeOriginal) {
-      return 0
-    }
+/** 1.91:1，Twitter/X `summary_large_image`、WhatsApp、Telegram、Facebook 通用尺寸。 */
+export const HOME_OG_SIZE = { width: 1200, height: 630 } as const
+export const HOME_OG_WEBP_QUALITY = 88
 
-    const aDate = (a.exif.DateTimeOriginal as unknown as string) || a.lastModified
-    const bDate = (b.exif.DateTimeOriginal as unknown as string) || b.lastModified
-    return bDate.localeCompare(aDate)
-  })
+/**
+ * 只挑横向照片当封面：竖构图裁成 1.91:1 会只剩中间一条，
+ * 全景（>2.6:1）裁完又只剩中间一块，都不适合做横幅。
+ */
+const BANNER_ASPECT = { min: 1.45, max: 2.6 }
 
-  return sortedPhotos.slice(0, count)
+interface PhotoLike {
+  id: string
+  width: number
+  height: number
+  previewUrl?: string | null
+  thumbnailUrl?: string | null
+  dateTaken?: string
+  lastModified?: string
+  exif?: { DateTimeOriginal?: string } | null
 }
 
-// 下载并处理照片缩略图
-async function downloadAndProcessThumbnail(thumbnailUrl: string, size = 150) {
-  try {
-    // 如果是本地路径，直接读取
-    if (thumbnailUrl.startsWith('/')) {
-      const localPath = join(process.cwd(), 'public', thumbnailUrl)
-      if (existsSync(localPath)) {
-        return await sharp(localPath).resize(size, size, { fit: 'cover' }).png().toBuffer()
-      }
-    }
-
-    // 远端 URL：优先用 photo pipeline 在 public/thumbnails 留下的本地缓存。
-    // 配了 thumbnail-storage 插件后 thumbnailUrl 是 R2 绝对地址，但仍然有同名本地文件，
-    // 这样构建期就不用为了 OG 卡再发一次网络请求（也避免网络抖动让卡片缺图）。
-    const baseName = decodeURIComponent(thumbnailUrl.split('/').pop() ?? '').replace(/\.[^.]+$/, '')
-    if (baseName) {
-      for (const extension of ['avif', 'webp', 'jpg', 'jpeg', 'png']) {
-        const cached = join(process.cwd(), 'public/thumbnails', `${baseName}.${extension}`)
-        if (existsSync(cached)) {
-          return await sharp(cached).resize(size, size, { fit: 'cover' }).png().toBuffer()
-        }
-      }
-    }
-
-    // 最后才走网络（sharp 能解 AVIF/WebP/JPEG）
-    if (/^https?:\/\//i.test(thumbnailUrl)) {
-      const response = await fetch(thumbnailUrl)
-      if (response.ok) {
-        const encoded = Buffer.from(await response.arrayBuffer())
-        return await sharp(encoded).resize(size, size, { fit: 'cover' }).png().toBuffer()
-      }
-    }
-
-    console.warn(`Cannot resolve thumbnail: ${thumbnailUrl}`)
-    return null
-  }
-  catch (error) {
-    console.warn(`Failed to process thumbnail: ${thumbnailUrl}`, error)
-    return null
-  }
+function photoTime(photo: PhotoLike): number {
+  return Date.parse(String(photo.exif?.DateTimeOriginal ?? ''))
+    || Date.parse(photo.lastModified ?? '')
+    || Date.parse(photo.dateTaken ?? '')
+    || 0
 }
 
-// 创建带特效的照片（旋转、阴影、边框）
-async function createPhotoWithEffects(imageBuffer: Buffer, size: number, rotation: number) {
-  try {
-    // 计算旋转后需要的画布大小
-    const diagonal = Math.ceil(size * Math.sqrt(2))
-    const canvasSize = diagonal + 40 // 额外空间用于阴影
+/** 新→旧找第一张适合做横幅的照片；一张都没有时退回最新的一张。 */
+function pickCoverPhoto(photos: PhotoLike[]): PhotoLike | null {
+  const sorted = [...photos].sort((a, b) => photoTime(b) - photoTime(a))
+  const isBannerFriendly = (photo: PhotoLike) => {
+    if (!photo.width || !photo.height) return false
+    const ratio = photo.width / photo.height
+    return ratio >= BANNER_ASPECT.min && ratio <= BANNER_ASPECT.max
+  }
+  return sorted.find(isBannerFriendly) ?? sorted[0] ?? null
+}
 
-    // 创建阴影效果的 SVG
-    const shadowSvg = `
-      <svg width="${canvasSize}" height="${canvasSize}" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
-            <feDropShadow dx="4" dy="8" stdDeviation="6" flood-color="rgba(0,0,0,0.4)"/>
-          </filter>
-        </defs>
-        <rect x="${(canvasSize - size - 12) / 2}" y="${(canvasSize - size - 12) / 2}" 
-              width="${size + 12}" height="${size + 12}" 
-              fill="#f0f0f0" filter="url(#shadow)" 
-              transform="rotate(${rotation} ${canvasSize / 2} ${canvasSize / 2})"/>
-      </svg>
-    `
+/** 优先用流水线留在 public/ 的本地缓存，最后才回落到 CDN（构建期少一次网络抖动）。 */
+async function resolveCoverSource(photo: PhotoLike): Promise<string | Buffer | null> {
+  const localCandidates = [
+    join(workdir, 'public/previews', `${photo.id}.avif`),
+    join(workdir, 'public/thumbnails', `${photo.id}.avif`),
+  ]
 
-    // 创建阴影层
-    const shadowBuffer = await sharp(Buffer.from(shadowSvg)).png().toBuffer()
+  for (const candidate of localCandidates) {
+    if (existsSync(candidate)) return candidate
+  }
 
-    // 处理原图片：添加浅灰色边框并旋转（适配黑色主题）
-    const photoWithBorder = await sharp(imageBuffer)
-      .extend({
-        top: 6,
-        bottom: 6,
-        left: 6,
-        right: 6,
-        background: { r: 240, g: 240, b: 240, alpha: 1 },
-      })
-      .png()
+  for (const url of [photo.previewUrl, photo.thumbnailUrl]) {
+    if (!url || !/^https?:\/\//i.test(url)) { continue }
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(5000) })
+      if (response.ok) return Buffer.from(await response.arrayBuffer())
+    }
+    catch {
+      // 构建期拿不到远端图时不阻塞构建，继续尝试下一个来源
+    }
+  }
+
+  return null
+}
+
+/**
+ * 生成站点级分享图。
+ *
+ * 返回的是**相对 public 的路径**（`/og-image-<ts>.webp`）：Cloudflare 中间件
+ * 靠 `og-image*.webp` 这个 pattern 认出「这是站点级卡片」再换成单张照片的图，
+ * 文件名格式不能改。
+ */
+export async function generateOGImage({ outputPath }: { outputPath: string }): Promise<string> {
+  const fullOutputPath = join(workdir, 'public', outputPath)
+  await mkdir(join(workdir, 'public'), { recursive: true })
+
+  const coverPhoto = pickCoverPhoto(buildTimePhotoLoader.getPhotos() as PhotoLike[])
+  const source = coverPhoto ? await resolveCoverSource(coverPhoto) : null
+
+  if (source) {
+    const webp = await sharp(source, { limitInputPixels: false })
+      .rotate()
+      .resize(HOME_OG_SIZE.width, HOME_OG_SIZE.height, { fit: 'cover', position: sharp.strategy.attention })
+      .webp({ quality: HOME_OG_WEBP_QUALITY, effort: 4 })
       .toBuffer()
 
-    // 创建最终画布
-    const canvas = sharp({
-      create: {
-        width: canvasSize,
-        height: canvasSize,
-        channels: 4,
-        background: { r: 0, g: 0, b: 0, alpha: 0 },
-      },
+    await sharp(webp).toFile(fullOutputPath)
+    console.info(`🖼️  Homepage OG image: ${coverPhoto?.id} (${Math.round(webp.length / 1024)}KB)`)
+  }
+  else {
+    // manifest 为空（例如 demo 首次构建）时没有照片可放；留一张纯色兜底，避免构建失败
+    await sharp({
+      create: { width: HOME_OG_SIZE.width, height: HOME_OG_SIZE.height, channels: 3, background: '#0a0a0a' },
     })
-
-    // 计算照片在画布中的位置
-    const photoX = (canvasSize - size - 12) / 2
-    const photoY = (canvasSize - size - 12) / 2
-
-    // 合成阴影和照片
-    const result = await canvas
-      .composite([
-        { input: shadowBuffer, top: 0, left: 0 },
-        {
-          input: photoWithBorder,
-          top: Math.round(photoY),
-          left: Math.round(photoX),
-        },
-      ])
-      .png()
-      .toBuffer()
-
-    // 旋转整个图像
-    return await sharp(result)
-      .rotate(rotation, { background: { r: 0, g: 0, b: 0, alpha: 0 } })
-      .png()
-      .toBuffer()
+      .webp({ quality: HOME_OG_WEBP_QUALITY })
+      .toFile(fullOutputPath)
+    console.warn('🖼️  Homepage OG image: no photo available, wrote a blank card')
   }
-  catch (error) {
-    console.warn('Failed to create photo with effects:', error)
-    // 如果特效失败，返回简单的边框版本（适配黑色主题）
-    return await sharp(imageBuffer)
-      .extend({
-        top: 4,
-        bottom: 4,
-        left: 4,
-        right: 4,
-        background: { r: 240, g: 240, b: 240, alpha: 1 },
-      })
-      .png()
-      .toBuffer()
-  }
+
+  return `/${outputPath}`
 }
 
-interface OGImageOptions {
+export interface HomeOgCopy {
   title: string
   description: string
-  width?: number
-  height?: number
-  outputPath: string
-  includePhotos?: boolean
-  photoCount?: number
 }
 
-export async function generateOGImage(options: OGImageOptions) {
-  const { title, description, width = 1200, height = 630, outputPath, includePhotos = true, photoCount = 4 } = options
+/**
+ * 站点级分享卡的文字。
+ *
+ * 图里没有字之后，卡片上就只剩平台原生渲染的这两行。描述沿用 `config.json` 的
+ * description（站主自己写的那句），再接上照片数量和最近更新月份，让第一次点开
+ * 的人知道这个站多大、还活着。
+ */
+export function buildHomeOgCopy(input: { siteName: string, siteDescription?: string }): HomeOgCopy {
+  const photos = buildTimePhotoLoader.getPhotos() as PhotoLike[]
+  const parts: string[] = []
 
-  // 确保输出目录存在
-  const outputDir = join(process.cwd(), 'public')
-  if (!existsSync(outputDir)) {
-    mkdirSync(outputDir, { recursive: true })
+  const description = input.siteDescription?.trim()
+  if (description) { parts.push(description) }
+
+  if (photos.length > 0) {
+    parts.push(`${photos.length} 张照片`)
   }
 
-  try {
-    let finalImage: Sharp
-
-    if (includePhotos) {
-      // 获取最新照片
-      const latestPhotos = await getLatestPhotos(photoCount)
-      console.info(`📸 Found ${latestPhotos.length} latest photos`)
-
-      // 创建基础画布 - 黑色主题
-      const canvas = sharp({
-        create: {
-          width,
-          height,
-          channels: 4,
-          background: { r: 0, g: 0, b: 0, alpha: 1 },
-        },
-      })
-
-      // 创建现代黑色主题渐变背景
-      const gradientSvg = `
-        <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" style="stop-color:#0f0f0f;stop-opacity:1" />
-              <stop offset="50%" style="stop-color:#1a1a1a;stop-opacity:1" />
-              <stop offset="100%" style="stop-color:#0a0a0a;stop-opacity:1" />
-            </linearGradient>
-            <radialGradient id="accent" cx="80%" cy="20%" r="60%">
-              <stop offset="0%" style="stop-color:#333333;stop-opacity:0.3" />
-              <stop offset="100%" style="stop-color:#000000;stop-opacity:0" />
-            </radialGradient>
-            <pattern id="grid" width="60" height="60" patternUnits="userSpaceOnUse">
-              <path d="M 60 0 L 0 0 0 60" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>
-            </pattern>
-          </defs>
-          <rect width="100%" height="100%" fill="url(#bg)"/>
-          <rect width="100%" height="100%" fill="url(#accent)"/>
-          <rect width="100%" height="100%" fill="url(#grid)" />
-        </svg>
-      `
-
-      const gradientBuffer = await sharp(Buffer.from(gradientSvg)).png().toBuffer()
-
-      // 创建文字层 - 使用 SVG 路径绘制 Helvetica 风格字体
-      const wrappedTitle = wrapSVGText(title, width - 120, {
-        fontSize: 48,
-        fontWeight: 'bold',
-      })
-      const wrappedDescription = wrapSVGText(description, width - 120, {
-        fontSize: 24,
-      })
-      const footerText = `Latest Photos • Generated on ${new Date().toLocaleDateString()}`
-
-      const titleSVG = renderSVGText(wrappedTitle, 60, 72, {
-        fontSize: 48,
-        fontWeight: 'bold',
-        color: 'white',
-        letterSpacing: 2,
-      })
-
-      const descriptionSVG = renderSVGText(wrappedDescription, 60, 146, {
-        fontSize: 24,
-        color: 'rgba(255,255,255,0.9)',
-        letterSpacing: 1,
-      })
-
-      const footerSVG = renderSVGText(footerText, 60, 556, {
-        fontSize: 18,
-        color: 'rgba(255,255,255,0.7)',
-        letterSpacing: 0.5,
-      })
-
-      const textSvg = `
-        <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-          ${titleSVG}
-          ${descriptionSVG}
-          ${footerSVG}
-        </svg>
-      `
-
-      const textBuffer = await sharp(Buffer.from(textSvg)).png().toBuffer()
-
-      // 准备合成图层
-      const composite: sharp.OverlayOptions[] = [
-        { input: gradientBuffer, top: 0, left: 0 },
-        { input: textBuffer, top: 0, left: 0 },
-      ]
-
-      // 处理照片缩略图 - 创建倾斜叠加效果
-      const photoSize = 160
-      const baseX = 580
-      const baseY = 200 // 往下移动 50px
-      const rotations = [-12, 5, -8, 10] // 每张照片的旋转角度
-      const offsets = [
-        { x: 0, y: 20 },
-        { x: 90, y: 60 },
-        { x: 180, y: -10 },
-        { x: 270, y: 70 },
-      ]
-
-      const length = Math.min(latestPhotos.length, photoCount)
-      for (let i = length - 1; i >= 0; i--) {
-        const photo = latestPhotos[i]
-        const thumbnailBuffer = await downloadAndProcessThumbnail(photo.thumbnailUrl, photoSize)
-
-        if (thumbnailBuffer) {
-          const rotation = rotations[i] || 0
-          const offset = offsets[i] || { x: i * 60, y: 0 }
-          const x = baseX + offset.x
-          const y = baseY + offset.y
-
-          // 创建带阴影和边框的照片
-          const photoWithEffects = await createPhotoWithEffects(thumbnailBuffer, photoSize, rotation)
-
-          composite.push({
-            input: photoWithEffects,
-            top: y,
-            left: x,
-          })
-
-          console.info(`📷 Added photo: ${photo.title} at position (${x}, ${y}) with rotation ${rotation}°`)
-        }
-      }
-
-      // 合成最终图像
-      finalImage = canvas.composite(composite)
-    }
-    else {
-      // 不包含照片的简单版本 - 黑色主题，使用 SVG 路径绘制字体
-      const simpleWrappedTitle = wrapSVGText(title, width - 120, {
-        fontSize: 72,
-        fontWeight: 'bold',
-      })
-      const simpleWrappedDescription = wrapSVGText(description, width - 120, {
-        fontSize: 32,
-      })
-      const simpleFooterText = `Generated on ${new Date().toLocaleDateString()}`
-
-      const simpleTitleSVG = renderSVGText(simpleWrappedTitle, 60, 152, {
-        fontSize: 72,
-        fontWeight: 'bold',
-        color: 'white',
-        letterSpacing: 3,
-      })
-
-      const simpleDescriptionSVG = renderSVGText(simpleWrappedDescription, 60, 256, {
-        fontSize: 32,
-        color: 'rgba(255,255,255,0.9)',
-        letterSpacing: 1.5,
-      })
-
-      const simpleFooterSVG = renderSVGText(simpleFooterText, 60, 526, {
-        fontSize: 24,
-        color: 'rgba(255,255,255,0.7)',
-        letterSpacing: 1,
-      })
-
-      const svgContent = `
-        <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" style="stop-color:#0f0f0f;stop-opacity:1" />
-              <stop offset="50%" style="stop-color:#1a1a1a;stop-opacity:1" />
-              <stop offset="100%" style="stop-color:#0a0a0a;stop-opacity:1" />
-            </linearGradient>
-            <radialGradient id="accent" cx="80%" cy="20%" r="60%">
-              <stop offset="0%" style="stop-color:#333333;stop-opacity:0.3" />
-              <stop offset="100%" style="stop-color:#000000;stop-opacity:0" />
-            </radialGradient>
-            <pattern id="grid" width="60" height="60" patternUnits="userSpaceOnUse">
-              <path d="M 60 0 L 0 0 0 60" fill="none" stroke="rgba(255,255,255,0.02)" stroke-width="1"/>
-            </pattern>
-          </defs>
-          
-          <rect width="100%" height="100%" fill="url(#bg)"/>
-          <rect width="100%" height="100%" fill="url(#accent)"/>
-          <rect width="100%" height="100%" fill="url(#grid)" />
-
-          ${simpleTitleSVG}
-          ${simpleDescriptionSVG}
-          ${simpleFooterSVG}
-          
-          <circle cx="1000" cy="150" r="80" fill="rgba(255,255,255,0.03)"/>
-          <circle cx="1050" cy="200" r="40" fill="rgba(255,255,255,0.02)"/>
-          <circle cx="950" cy="250" r="60" fill="rgba(255,255,255,0.025)"/>
-        </svg>
-      `
-
-      finalImage = sharp(Buffer.from(svgContent))
-    }
-
-    // 生成最终图片。WebP q90 与 PNG 在 1200×628 卡片上肉眼无差别，体积约 1/10。
-    const buffer = await finalImage.webp({ quality: 90 }).toBuffer()
-
-    // 写入文件
-    const fullOutputPath = join(outputDir, outputPath)
-    writeFileSync(fullOutputPath, buffer)
-
-    console.info(`✅ OG image generated: ${fullOutputPath}`)
-    return fullOutputPath
+  const latestTimestamp = photos.reduce((latest, photo) => Math.max(latest, photoTime(photo)), 0)
+  if (latestTimestamp > 0) {
+    const latest = new Date(latestTimestamp)
+    parts.push(`最近更新 ${latest.getFullYear()} 年 ${latest.getMonth() + 1} 月`)
   }
-  catch (error) {
-    console.error('❌ Error generating OG image:', error)
-    throw error
+
+  return {
+    title: input.siteName,
+    description: parts.join(' · ') || input.siteName,
   }
 }

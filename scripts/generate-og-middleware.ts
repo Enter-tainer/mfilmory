@@ -13,7 +13,7 @@
  *
  * Env: OG_STORAGE_URL > --storage-url=… > S3_CUSTOM_DOMAIN from .env/process.env.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, copyFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
@@ -23,6 +23,8 @@ import { CloudflareMiddlewareVendor } from '../packages/builder/src/plugins/og-i
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const target = path.join(root, 'functions', '_middleware.ts')
+// 照片文案表来自 manifest；--check 会把仓库根换成临时目录，所以这里用绝对路径
+const manifestPath = path.join(root, 'apps/web/src/data/photos-manifest.json')
 // drop the bare `--` pnpm inserts when invoked as `pnpm og:middleware -- --check`
 const argv = process.argv.slice(2).filter(arg => arg !== '--')
 const argValue = (name: string) => {
@@ -34,10 +36,10 @@ const checkOnly = argv.includes('--check')
 
 function readEnvFileValue(key: string): string | undefined {
   const envPath = path.join(root, '.env')
-  if (!existsSync(envPath)) return undefined
+  if (!existsSync(envPath)) { return undefined }
   for (const line of readFileSync(envPath, 'utf8').split(/\r?\n/)) {
     const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)$/)
-    if (match && match[1] === key) return match[2].trim().replace(/^['"]|['"]$/g, '')
+    if (match && match[1] === key) { return match[2].trim().replace(/^['"]|['"]$/g, '') }
   }
   return undefined
 }
@@ -73,6 +75,7 @@ async function generateInto(repoRoot: string): Promise<string> {
     type: 'cloudflare-middleware',
     storageURL,
     siteConfigPath: 'config.json',
+    manifestPath,
   })
   await vendor.build({ repoRoot, logger })
   return readFileSync(path.join(repoRoot, 'functions', '_middleware.ts'), 'utf8')

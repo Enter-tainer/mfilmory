@@ -14,7 +14,7 @@
 | `apps/web` | Vite 8 + React 19 单页应用 —— 画廊 UI、查看器、地图、i18n、PWA manifest |
 | `packages/builder` | 照片流水线 CLI：S3 / 本地 / GitHub / Eagle 同步 → EXIF / 缩略图 / blurhash → `photos-manifest.json` |
 | `packages/data` | `PhotoLoader`，把注入的 manifest 包装成查询结构 |
-| `packages/{typing,ui,hooks,utils,renderer,sdk,viewer-motion,webgl-viewer}` | SPA 依赖的共享包（OG 图渲染、WebGL 查看器、视图动效、UI 原语等） |
+| `packages/{typing,ui,hooks,utils,sdk,viewer-motion,webgl-viewer}` | SPA 依赖的共享包（WebGL 查看器、视图动效、UI 原语等） |
 | `locales/app` | SPA 文案（en / zh-CN / zh-HK / zh-TW / jp / ko） |
 | `site.config.ts` + `config.json` | 站点展示配置（站名、作者、主题色、地图） |
 | `builder.config.ts` + `.env` | 照片来源与凭据（S3 兼容存储 / 本地目录） |
@@ -32,7 +32,7 @@
 | `manifest-inject.ts` | 把 `photos-manifest.json` 内联成 `<script id="manifest">window.__MANIFEST__ = …` |
 | `site-config-inject.ts` | 注入 `window.__SITE_CONFIG__`（`site.config.ts` + `config.json`） |
 | `photos-static.ts` | 静态站的照片数据 / 路由辅助 |
-| `og-image-plugin.ts` | 构建期生成站点 OG 图 + 全部 favicon（`logo.jpg` + `sharp`） |
+| `og-image-plugin.ts` | 构建期生成站点分享图（一张满幅照片）+ 全部 favicon（`logo.jpg` + `sharp`），并写 og/twitter meta |
 | `feed-sitemap.ts` | 生成 `feed.xml` / `sitemap.xml` |
 | `locales-json.ts` | 把 `locales/app/*.json` 的扁平点号 key 展开成嵌套对象（Windows 路径比较已修） |
 | `i18n-hmr.ts` / `locales.ts` | 文案热更新辅助（`locales.ts` 是死代码，上游如此） |
@@ -45,7 +45,8 @@
 - `thumbnail-storage/`：缩略图上传
 - `geocoding.js`：照片地点反查（`geocodingPlugin`）
 - `github-repo-sync.js`：把 manifest / 缩略图写回 GitHub 仓库
-- `og-image-storage/`：**OG 图插件**。其中 `vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk` 就是 **Cloudflare Pages 中间件**：拦截 `/photos/:slug` 的 HTML，把 `og:image` / `twitter:image` 重写到 R2 上的 `.afilmory/og-images/*.png`
+- `og-image-storage/`：**分享图插件**。卡片就是照片本身（1200×630 满幅 WebP，**不画**黑底/站名/标题），文字交给分享平台原生渲染。其中 `vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk` 就是 **Cloudflare Pages 中间件**：拦截 `/photos/:slug` 的 HTML，把 `og:image` / `twitter:image` 重写到 R2 上的 `.afilmory/og-images/*.webp`，并按 manifest 注入每张照片的 `og:title` / `og:description`（多行 `📸 / 📝 / 📅 / 🗺 / 📍` EXIF 明细）、`<title>` 和单行 `meta[name=description]`
+  - 文案规则在 `packages/builder/src/plugins/og-image-storage/photo-text.ts`；照片直放（裁切/缩放）在 `photo-og.ts`
   - 产物写到仓库根 `functions/_middleware.ts`，由 `builder.config.ts` 里的 `ogImagePlugin({ vendor: { type: 'cloudflare-middleware', storageURL } })` 触发
   - 该文件是**构建产物，不提交**（`.gitignore` 只忽略这精确一个路径）；内容由 `config.json` 的 `url` + `builder.config.ts` 的 `storageURL`（通常即 `.env` 的 `S3_CUSTOM_DOMAIN`）决定。`pnpm build` 会自动生成，也可以用 `pnpm og:middleware` 单独重生成（`-- --check` 校验磁盘上的文件是否最新，`--storage-url=…` 临时覆盖 CDN 地址）
   - 部署到 Cloudflare Pages 时 **project root 必须是仓库根**（或显式 `--functions-directory`），否则 `functions/` 不会被带上，OG 改写就失效
@@ -109,14 +110,14 @@ pnpm build            # 把 manifest 内联进 SPA，产物在 apps/web/dist
 | --- | --- | --- | --- |
 | 缩略图（网格，`500px` 宽） | **AVIF** | `quality: 70`, `effort: 6` | 网格一格最多显示 500 物理像素（手机 150 CSS@3x、iPad/Mac 250 CSS@2x、4K@100% 472px），所以 500 正好。实测 SSIMULACRA2 83.5 vs 旧 600px JPEG q100 的 85.6（98% 观感），体积 32KB vs 248KB |
 | 占位图（阅览器，长边 `2560`） | **AVIF** | `quality: 45`, `effort: 6` | 点开大图时先显示它，原图下完无缝替换。4K 全屏实测 S2 27.3 / XPSNR 37.8 / SSIM 0.80，旧 600px JPEG q100 占位只有 −16.1 / 33.9 / 0.70，而体积还小 17%。按**长边**而非宽度缩放，竖图不会白付 1.5 倍像素 |
-| OG 卡（分享图） | **WebP** | `quality: 90` | 1200×628；PNG 421KB → WebP ~33KB。**OG 永远不要用 AVIF**：跨平台实测只有 Facebook 支持 |
+| OG 卡（分享图） | **WebP** | `quality: 88` | 1200×630，**照片满幅、无底色无文字**（站点级从近期横向照片里挑一张）。PNG 时代 421KB → WebP ~30–180KB。**OG 永远不要用 AVIF**：跨平台实测只有 Facebook 支持 |
 
 编码器是 sharp（libvips 8.18.7 → libheif 1.23.5 → libaom 3.15.1）。`effort` 是 libaom 速度档（0–9），6 比默认 4 慢但同质量更小；改它会让所有产物重新编码。参数曲线和目视对比在 `docs/image-quality/`。
 
 - 缩略图文件名/扩展名统一由 `packages/builder/src/image/thumbnail.ts` 的 `getThumbnailFilename()` 提供，不要再硬编码 `.jpg`（上游 #259 就是这么坏的）。
 - 换格式要全量重生成：`pnpm build:manifest -- --force-thumbnails`。残留的旧格式文件由 `handleDeletedPhotos` 清理——只在新格式文件已存在时才删，避免 `--force-manifest`（不重生成缩略图）把唯一副本删掉。
 - 远端存储里的旧格式对象**不会**自动删（`thumbnail-storage` 把自己的前缀排除在扫描外）：用 `pnpm cleanup:assets` 统计，`-- --delete` 清缩略图，其他目录加 `--directory=.afilmory/og-images --keep=webp`。**先确认线上 manifest 已经不引用旧格式再删**。
-- OG 渲染链（satori → resvg）只可靠接受 PNG/JPEG 输入：WebP 会被静默丢弃，AVIF 直接抛 `t is not iterable`。所以 `og-image-storage` 会先用 sharp 把缩略图解码重编码成 PNG 再交给 satori，换缩略图格式时不要绕过这一步。
+- 分享图不走 Satori/resvg，直接用 sharp 从 2560px 的占位图（preview）缩放出 1200×630 WebP：源图够大、不用再解码重编码成 PNG，也不依赖构建机装中文字体。
 - 原图与产物都有缓存：下载过的原图存在 `apps/web/src/data/.cache/originals/`，每张照片每种产物用哪组参数编码记录在 `.cache/asset-signatures.json`。只改一档参数时其他档不会重算。`MFILMORY_NO_ORIGINAL_CACHE=1` 跳过原图缓存，`MFILMORY_FORCE_ENCODE=1` 强制重编码。
 
 #### AVIF 作为**输入**（照片本身就是 .avif）
@@ -172,8 +173,9 @@ pnpx wrangler pages deploy apps/web/dist --project-name mgt-afilmory --branch ma
 - 部署后验证 OG 中间件是否生效：
 
   ```powershell
-  curl.exe -s https://gallery.mgt.moe/photos/<photoId> | Select-String 'og:image'
-  # 期望：https://r2-gallery.996404.xyz/mgt-gallery/.afilmory/og-images/<photoId>.png
+  curl.exe -s https://gallery.mgt.moe/photos/<photoId> | Select-String 'og:image|og:title|og:description'
+  # 期望：https://r2-gallery.996404.xyz/mgt-gallery/.afilmory/og-images/<photoId>.webp
+  #       og:title 是地名（不是站名），og:description 是逐行 EXIF 明细
   ```
 
 - 想单独重新生成中间件（改模板/换 CDN 后不必跑整套照片流水线）：

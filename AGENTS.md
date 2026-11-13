@@ -46,7 +46,7 @@ apps/web (Vite + React 19 SPA) ←────────┘
 
 - `apps/web/plugins/vite/*` — SPA 的 Vite 插件：`manifest-inject`（内联 `__MANIFEST__`）、`site-config-inject`、`photos-static`、`og-image-plugin`（构建期 OG + favicon）、`feed-sitemap`、`locales-json`（点号 key 展开）、`i18n-hmr`、`deps`（分包）、`ast`（`tw` 宏）。
 - `packages/builder/src/plugins/*` — 流水线插件：`storage/{local,s3,b2,github,eagle}`、`thumbnail-storage`、`geocoding`、`github-repo-sync`、`og-image-storage`。
-- **Cloudflare OG 插件** = `og-image-storage/vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk`。它把 `/photos/:slug` 的 `og:image`/`twitter:image` 改写到 R2 的 `.afilmory/og-images/*.png`，产物是仓库根 `functions/_middleware.ts`（**构建产物，不提交、已被 ignore**；`pnpm build` 时由 builder 重新生成，改模板后可用 `pnpm og:middleware` 单独重生成，`-- --check` 校验磁盘文件是否最新）。
+- **Cloudflare 分享图插件** = `og-image-storage/vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk`。卡片图就是照片本身（1200×630 满幅 WebP，不画底色/站名/标题），文字由平台原生渲染；中间件把 `/photos/:slug` 的 `og:image`/`twitter:image` 改写到 R2 的 `.afilmory/og-images/*.webp`，并按 manifest 注入该照片的 `og:title`/`og:description`/`<title>`/`meta[name=description]`。产物是仓库根 `functions/_middleware.ts`（**构建产物，不提交、已被 ignore**；`pnpm build` 时由 builder 重新生成，改模板后可用 `pnpm og:middleware` 单独重生成，`-- --check` 校验磁盘文件是否最新）。
 - **部署 = Cloudflare Pages 项目 `mgt-afilmory`（生产分支 `main`）**，用仓库里的脚本，别手搓：`pnpm deploy:cloudflare`（构建 + 部署）/ `pnpm deploy:preview`（预览）/ `node scripts/deploy.mjs --skip-build --dry-run`（调试）。脚本必须在**仓库根**执行并以参数传 dist 目录，否则根 `functions/` 不会被打包，OG 改写失效；`apps/web/wrangler.jsonc` 只在 `apps/web` 里部署时生效，别用。中间件缺失时部署脚本会先调用 `pnpm og:middleware` 补生成（依赖 `.env` 里的 `S3_CUSTOM_DOMAIN`）。
 - `plugins/eslint/*` — 本地 ESLint 插件（i18n JSON、no-debug、package.json、递归排序）。
 
@@ -92,5 +92,5 @@ git grep -n "<pattern>" -- ':!node_modules' ':!apps/web/dist'
 
 - **`--dry-run` 的计数不可信（会偏高）**：`packages/builder/src/builder/builder.ts:87` 在 `dryRun` 时跳过 `ensurePluginsReady()`，于是 thumbnail / og-image 插件注册的 `.afilmory/thumbnails/`、`.afilmory/og-images/` 排除前缀不生效，桶里已生成的缩略图和 OG 图会被当成"照片"（实测对 369 张的库会虚报成 1110 张、要求处理 741 张）。真实构建（不加 `--dry-run`）会排除这些生成物，实测扫描结果 382 个文件 → 369 张照片 → 0 张需要处理。估算增量时别信 dry-run 的数字。
 
-- `packages/builder/src/plugins/og-image-storage/index.ts` 的 Satori 字体已从删掉的 `be/apps/core/src/modules/content/og/assets` 挪到 `packages/builder/assets/og`（`Geist-Medium.ttf` + `HarmonyOS_Sans_SC_Medium.ttf`），改这块时别再指回去。
+- 分享图不再经过 Satori/resvg：`packages/renderer`（`@afilmory/og-renderer`）与 `packages/builder/assets/og` 的中文字体已随「照片直放」方案一起删掉。图片由 `og-image-storage/photo-og.ts` 用 sharp 从 2560px 占位图缩放，文案由 `photo-text.ts` 生成；要回到「设计卡片」方案得从 git 历史里取回这两块。
 - 本 fork 已同步到 `upstream/main` `cdeada39`（2026-11）。上游 `c392e065..cdeada39` 的 40 个提交全是 `apps/mobile`（+ 移动端 CI/设计文档），`apps/web`、`packages`、`locales`、`scripts` 一个文件都没动；之后上游再有 `apps/web` 改动可直接 `git cherry-pick`。

@@ -1,8 +1,19 @@
 // 匹配 HTML 里「初始」的 og:image —— 站点级卡片 /og-image-<ts>.webp（由 web 的
-// og-image 插件在构建时生成），命中后重写成该照片在 R2 上的卡片。
+// og-image 插件在构建时生成），命中后重写成该照片在 R2 上的分享图。
 // 注意匹配的是输入（站点级 webp），输出是 .afilmory/og-images/<id>.webp：
 // 后者路径以 .afilmory 开头，不会被这个 pattern 再次命中。
 const OG_IMAGE_PATTERN = /^https?:\/\/{{ patternHost }}\/+og-image.*\.webp$/i
+
+const SITE_ORIGIN = {{ siteOriginJson }}
+const SITE_NAME = {{ siteNameJson }}
+
+// photoId → 卡片文字。分享平台（WhatsApp / Telegram / X / iMessage）读的是服务端
+// HTML 里的 og:title / og:description；SPA 每张照片返回同一份 index.html，
+// 所以逐张照片的文字只能在这里补。卡片图里不再画字，这两行就是全部的文案。
+//   title       ← og:title / twitter:title / <title>
+//   description ← og:description / twitter:description（多行 EXIF 明细）
+//   summary     ← meta[name=description]（单行，给搜索结果摘要用）
+const PHOTO_TEXT: Record<string, { title: string, description: string, summary: string }> = {{ photoTextJson }}
 
 const normalizeSlug = (slug: string) => {
     try {
@@ -12,10 +23,20 @@ const normalizeSlug = (slug: string) => {
     }
 }
 
+const decodeSlug = (slug: string) => {
+    try {
+        return decodeURIComponent(slug)
+    } catch {
+        return slug
+    }
+}
+
 const buildOgImageUrl = (slug: string) => {
     const encodedOnce = normalizeSlug(slug)
     return `{{ ogBase }}/${encodedOnce}.webp`
 }
+
+const buildPageUrl = (slug: string) => `${SITE_ORIGIN}/photos/${normalizeSlug(slug)}`
 
 const isHtmlResponse = (response: Response) => {
     const contentType = response.headers.get('content-type') || ''
@@ -29,6 +50,20 @@ const shouldRewriteMeta = (content: string | null | undefined) => {
     return OG_IMAGE_PATTERN.test(content.trim())
 }
 
+const imageHandler = (ogImageUrl: string) => ({
+    element(element: Element) {
+        const content = element.getAttribute('content')
+        if (!shouldRewriteMeta(content)) return
+        element.setAttribute('content', ogImageUrl)
+    },
+})
+
+const metaHandler = (value: string) => ({
+    element(element: Element) {
+        element.setAttribute('content', value)
+    },
+})
+
 export async function onRequest(context: { request: Request; next: () => Promise<Response> }) {
     const url = new URL(context.request.url)
     if (!url.pathname.startsWith('/photos/')) return context.next()
@@ -40,17 +75,33 @@ export async function onRequest(context: { request: Request; next: () => Promise
     if (!isHtmlResponse(response)) return response
 
     const ogImageUrl = buildOgImageUrl(slug)
+    const text = PHOTO_TEXT[decodeSlug(slug)] ?? PHOTO_TEXT[slug]
 
-    const handler = {
-        element(element: Element) {
-            const content = element.getAttribute('content')
-            if (!shouldRewriteMeta(content)) return
-            element.setAttribute('content', ogImageUrl)
-        },
+    let rewriter = new HTMLRewriter()
+        .on('meta[property="og:image"]', imageHandler(ogImageUrl))
+        .on('meta[property="twitter:image"]', imageHandler(ogImageUrl))
+
+    // 没有这张照片的文字时保持站点级标题/描述不动，只换图。
+    if (text) {
+        const titleHandler = metaHandler(text.title)
+        const descriptionHandler = metaHandler(text.description)
+        const summaryHandler = metaHandler(text.summary)
+        const pageUrl = buildPageUrl(slug)
+
+        rewriter = rewriter
+            .on('meta[property="og:title"]', titleHandler)
+            .on('meta[property="twitter:title"]', titleHandler)
+            .on('meta[property="og:description"]', descriptionHandler)
+            .on('meta[property="twitter:description"]', descriptionHandler)
+            .on('meta[name="description"]', summaryHandler)
+            .on('meta[property="og:url"]', metaHandler(pageUrl))
+            .on('meta[property="twitter:url"]', metaHandler(pageUrl))
+            .on('title', {
+                element(element: Element) {
+                    element.setInnerContent(`${text.title} | ${SITE_NAME}`)
+                },
+            })
     }
 
-    return new HTMLRewriter()
-        .on('meta[property="og:image"]', handler)
-        .on('meta[property="twitter:image"]', handler)
-        .transform(response)
+    return rewriter.transform(response)
 }

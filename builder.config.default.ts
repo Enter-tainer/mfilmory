@@ -63,14 +63,13 @@ export default defineBuilderConfig(() => ({
   //
   // OG image plugin (optional): generates the Cloudflare Pages OG middleware
   // (`functions/_middleware.ts`) from the vendor template during `pnpm build`.
-  // `storageURL` must be the public base URL of the storage serving
-  // `.afilmory/og-images/*` — normally the same value as S3_CUSTOM_DOMAIN,
-  // which also drives `pnpm og:middleware` and scripts/deploy.mjs.
+  // The card itself is just the photo; titles/EXIF are injected as og:title /
+  // og:description by that middleware. `storageURL` must be the public base URL
+  // of the storage serving `.afilmory/og-images/*` — normally the same value as
+  // S3_CUSTOM_DOMAIN, which also drives `pnpm og:middleware` and scripts/deploy.mjs.
   //
   // Import it from '@afilmory/builder' first, then uncomment:
   // ogImagePlugin({
-  //   siteName: 'example.com',
-  //   accentColor: '#007bff',
   //   vendor: {
   //     type: 'cloudflare-middleware',
   //     storageURL: env.S3_CUSTOM_DOMAIN,
