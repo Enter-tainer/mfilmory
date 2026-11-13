@@ -44,8 +44,5 @@
       "code": "xxxxxxxxxxxxxx",
       "icon": "https://example.com/beian.png"
     }
-  },
-  "telemetry": {
-    "vibeloft": true
   }
 }

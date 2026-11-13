@@ -38,7 +38,6 @@
 | `i18n-hmr.ts` / `locales.ts` | 文案热更新辅助（`locales.ts` 是死代码，上游如此） |
 | `deps.ts` | 手动分包（react / i18next / heic-to） |
 | `ast.ts` | `tw` 模板字符串压缩宏（unplugin-ast） |
-| `vibeloft-telemetry.ts` | 可选统计注入（`config.json` 的 `telemetry.vibeloft`） |
 
 **2. `packages/builder` 的照片流水线插件** — `packages/builder/src/plugins/`
 
