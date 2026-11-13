@@ -7,7 +7,7 @@ import { isNil } from 'es-toolkit/compat'
 import { useAtomValue } from 'jotai'
 import { m } from 'motion/react'
 import type { FC } from 'react'
-import { Fragment, useCallback, useMemo } from 'react'
+import { Fragment, lazy, Suspense, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { isExiftoolLoadedAtom } from '~/atoms/app'
@@ -25,9 +25,12 @@ import { getRenderablePhotoRegions } from '~/modules/viewer/photo-region-bounds'
 import { ExifRowGroup, ExifSection } from './ExifSection'
 import { formatExifData, Row } from './formatExifData'
 import { HistogramChart } from './HistogramChart'
-import { MiniMap } from './MiniMap'
 import { PhotoRegionsSection } from './PhotoRegionsSection'
 import { RawExifViewer } from './RawExifViewer'
+
+// MiniMap 一被静态引用就会把整个 maplibre-gl（≈1 MB JS + 83 KB CSS）拖进 viewer chunk，
+// 而只有「带 GPS 的照片 + 展开 EXIF」时才真的需要它。
+const MiniMap = lazy(() => import('./MiniMap').then(m => ({ default: m.MiniMap })))
 
 const captureChipClassName = 'border-accent/20 bg-accent/10 flex h-6 items-center gap-2 rounded-md border px-2'
 
@@ -449,7 +452,9 @@ export const ExifPanelContent: FC<ExifPanelContentProps> = ({
                 )}
 
                 {decimalLatitude !== null && decimalLongitude !== null && (
-                  <MiniMap latitude={decimalLatitude} longitude={decimalLongitude} photoId={currentPhoto.id} />
+                  <Suspense fallback={<div className="h-40 w-full animate-pulse rounded-lg bg-white/5" />}>
+                    <MiniMap latitude={decimalLatitude} longitude={decimalLongitude} photoId={currentPhoto.id} />
+                  </Suspense>
                 )}
               </ExifSection>
             )}

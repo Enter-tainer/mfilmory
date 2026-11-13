@@ -3,6 +3,7 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 
 import { clsxm, focusRing } from '@afilmory/utils'
 import type { FeatureCollection } from 'geojson'
+import { setWorkerUrl } from 'maplibre-gl'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { MapRef } from 'react-map-gl/maplibre'
 import Map from 'react-map-gl/maplibre'
@@ -23,6 +24,10 @@ import {
   MapControls,
   PhotoMarkerPin,
 } from './shared'
+
+// 这个模块本身就是用 React.lazy() 载入的，maplibre 的 worker 注册放在这里
+// 不会污染首屏 chunk（注册必须在任何 map 实例创建之前完成）。
+setWorkerUrl(mapLibreWorkerUrl)
 
 export interface PureMaplibreProps {
   id?: string

@@ -1,5 +1,3 @@
-import { heicTo, isHeic } from 'heic-to'
-
 import { i18nAtom } from '~/i18n'
 import { isSafari } from '~/lib/device-viewport'
 import type { LoadingCallbacks } from '~/lib/image-loader-manager'
@@ -95,6 +93,8 @@ function generateCacheKey(src: string, options: HeicConversionOptions): string {
  */
 export async function detectHeicFormat(file: File | Blob): Promise<boolean> {
   try {
+    // heic-to 会带进 3 MB 的 libheif 解码器，只有真要转换 HEIC 时才值得加载
+    const { isHeic } = await import('heic-to')
     return await isHeic(file as File)
   }
   catch (error) {
@@ -140,6 +140,7 @@ export async function convertHeicImage(
     // 转换图片
     const converted = await convertHeicWithWebCodecs(file, format, quality).catch(async (error) => {
       console.warn('HEIC WebCodecs unavailable; using libheif', error)
+      const { heicTo } = await import('heic-to')
       return { blob: await heicTo({ blob: file, type: format, quality }), gainMap: undefined }
     })
     const convertedBlob = converted.blob

@@ -1,5 +1,4 @@
 import type { AppleGainMapSource } from '@afilmory/webgl-viewer'
-import { fileTypeFromBlob } from 'file-type'
 
 import { i18nAtom } from '~/i18n'
 import { imageConverterManager } from '~/lib/image-convert'
@@ -81,7 +80,8 @@ export class ImageLoaderManager {
     }
 
     try {
-      // 使用 magic number 检测文件类型
+      // 使用 magic number 检测文件类型（file-type 只有在真正加载图片时才需要）
+      const { fileTypeFromBlob } = await import('file-type')
       const fileType = await fileTypeFromBlob(blob)
 
       if (!fileType) {
