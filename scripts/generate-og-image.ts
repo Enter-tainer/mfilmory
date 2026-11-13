@@ -365,8 +365,8 @@ export async function generateOGImage(options: OGImageOptions) {
       finalImage = sharp(Buffer.from(svgContent))
     }
 
-    // 生成最终图片
-    const buffer = await finalImage.png().toBuffer()
+    // 生成最终图片。WebP q90 与 PNG 在 1200×628 卡片上肉眼无差别，体积约 1/10。
+    const buffer = await finalImage.webp({ quality: 90 }).toBuffer()
 
     // 写入文件
     const fullOutputPath = join(outputDir, outputPath)

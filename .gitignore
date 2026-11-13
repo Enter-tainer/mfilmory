@@ -3,7 +3,7 @@ node_modules
 dist
 *.local
 
-public/og-image-*.png
+public/og-image-*
 
 # user-editable, git-ignored configuration
 config.json

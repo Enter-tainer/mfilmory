@@ -26,7 +26,7 @@ export function ogImagePlugin(options: OGImagePluginOptions = {}): Plugin {
     async buildStart() {
       // 在构建开始时生成 OG 图片
       const timestamp = Date.now()
-      const fileName = `og-image-${timestamp}.png`
+      const fileName = `og-image-${timestamp}.webp`
 
       try {
         // 生成 favicon

@@ -16,7 +16,7 @@ export async function cleanupOldOGImages(keepCount = 3) {
 
     // 找到所有 OG 图片文件
     for (const file of files) {
-      if (file.startsWith('og-image-') && file.endsWith('.png')) {
+      if (file.startsWith('og-image-') && (file.endsWith('.webp') || file.endsWith('.png'))) {
         const filePath = join(publicDir, file)
         const stats = await stat(filePath)
         ogImageFiles.push({
