@@ -46,8 +46,8 @@ apps/web (Vite + React 19 SPA) ←────────┘
 
 - `apps/web/plugins/vite/*` — SPA 的 Vite 插件：`manifest-inject`（内联 `__MANIFEST__`）、`site-config-inject`、`photos-static`、`og-image-plugin`（构建期 OG + favicon）、`feed-sitemap`、`locales-json`（点号 key 展开）、`i18n-hmr`、`deps`（分包）、`ast`（`tw` 宏）。
 - `packages/builder/src/plugins/*` — 流水线插件：`storage/{local,s3,b2,github,eagle}`、`thumbnail-storage`、`geocoding`、`github-repo-sync`、`og-image-storage`。
-- **Cloudflare OG 插件** = `og-image-storage/vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk`。它把 `/photos/:slug` 的 `og:image`/`twitter:image` 改写到 R2 的 `.afilmory/og-images/*.png`，产物是仓库根 `functions/_middleware.ts`（**已提交**；正常 `pnpm build` 时由 builder 重新生成，改模板后可用 `pnpm og:middleware` 单独重生成，`-- --check` 校验是否过期）。
-- **部署 = Cloudflare Pages 项目 `mgt-afilmory`（生产分支 `main`）**，用仓库里的脚本，别手搓：`pnpm deploy:cloudflare`（构建 + 部署）/ `pnpm deploy:preview`（预览）/ `node scripts/deploy.mjs --skip-build --dry-run`（调试）。脚本必须在**仓库根**执行并以参数传 dist 目录，否则根 `functions/` 不会被打包，OG 改写失效；`apps/web/wrangler.jsonc` 只在 `apps/web` 里部署时生效，别用。
+- **Cloudflare OG 插件** = `og-image-storage/vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk`。它把 `/photos/:slug` 的 `og:image`/`twitter:image` 改写到 R2 的 `.afilmory/og-images/*.png`，产物是仓库根 `functions/_middleware.ts`（**构建产物，不提交、已被 ignore**；`pnpm build` 时由 builder 重新生成，改模板后可用 `pnpm og:middleware` 单独重生成，`-- --check` 校验磁盘文件是否最新）。
+- **部署 = Cloudflare Pages 项目 `mgt-afilmory`（生产分支 `main`）**，用仓库里的脚本，别手搓：`pnpm deploy:cloudflare`（构建 + 部署）/ `pnpm deploy:preview`（预览）/ `node scripts/deploy.mjs --skip-build --dry-run`（调试）。脚本必须在**仓库根**执行并以参数传 dist 目录，否则根 `functions/` 不会被打包，OG 改写失效；`apps/web/wrangler.jsonc` 只在 `apps/web` 里部署时生效，别用。中间件缺失时部署脚本会先调用 `pnpm og:middleware` 补生成（依赖 `.env` 里的 `S3_CUSTOM_DOMAIN`）。
 - `plugins/eslint/*` — 本地 ESLint 插件（i18n JSON、no-debug、package.json、递归排序）。
 
 ## 本 fork 相对上游的改动（改代码时注意别改回去）
@@ -68,6 +68,25 @@ apps/web (Vite + React 19 SPA) ←────────┘
 - i18n：`locales/app/*.json` 扁平 key + `.` 分隔；先改 `en.json`，其他语言由 ESLint 自动裁剪；禁止 `a.b` 与 `a.b.c` 同时存在。
 - 没有 feature flag、没有向后兼容 shim —— 直接改代码。
 - TypeScript 严格模式，`pnpm type-check` 必须通过；提交前跑 `pnpm lint`。
+
+## 文档与生成物一致性（改代码前必查）
+
+同一个事实在仓库里通常有多处描述：`README.md`、本文件、`scripts/*` 的注释与提示文案、`.github/workflows/*`、以及模板 `builder.config.default.ts`。改动下列内容时，必须先用 grep 找出所有引用并一起更新，不能只提交最小 diff：
+
+- 删除、重命名，或把某个**已跟踪文件**改成「构建生成 + gitignore」
+- 改变脚本语义或提示文案（例如 `og:middleware --check` 里的“过期”是相对哪个文件）
+- 改变部署/CI 路径的前置条件（例如 `deploy.mjs --skip-build` 依赖仓库里的生成物）
+- 修改真正在用的 `builder.config.ts`，而模板 `builder.config.default.ts` 没有同步
+
+提交前至少跑一次（把 `<pattern>` 换成被删/改名/改语义的对象）：
+
+```bash
+git grep -n "<pattern>" -- ':!node_modules' ':!apps/web/dist'
+```
+
+- 多 commit 或 squash 后，检查 PR body 与最终 diff 是否一致。
+
+判据：README、AGENTS.md、脚本输出、模板、CI 必须与代码行为描述同一套事实；“生成物是否入库”只能有一个结论。反例：中间件改为 ignore 后，README/AGENTS 仍写“已提交”、`og:middleware --check` 仍提示“commit the result”、`deploy.mjs --skip-build` 缺少补生成兜底。
 
 ## 已知遗留 / 下一步
 

@@ -10,7 +10,7 @@
  * Usage:
  *   node scripts/deploy.mjs                  # build + deploy to production (branch main)
  *   node scripts/deploy.mjs --preview        # build + deploy as a preview deployment
- *   node scripts/deploy.mjs --skip-build     # deploy the existing apps/web/dist
+ *   node scripts/deploy.mjs --skip-build     # deploy the existing apps/web/dist (regenerates the middleware if missing)
  *   node scripts/deploy.mjs --dry-run        # print the wrangler command only
  *   node scripts/deploy.mjs --project=foo --branch=bar --dirty
  *
@@ -70,8 +70,23 @@ if (!existsSync(middleware)) {
   if (allowMissingMiddleware) {
     console.warn(`⚠ functions/_middleware.ts is missing — the Cloudflare OG middleware will NOT be deployed (${hint})`)
   }
+  else if (dryRun) {
+    console.warn(`⚠ functions/_middleware.ts is missing (dry-run: not regenerating) — ${hint}`)
+  }
   else {
-    fail(`functions/_middleware.ts is missing, so the OG middleware would be silently dropped — ${hint}`)
+    // The middleware is git-ignored build output, so a fresh clone or a
+    // `--skip-build` deploy may not have it. Regenerate it from the vendor
+    // template before giving up; the generator reads S3_CUSTOM_DOMAIN from .env.
+    console.info('• functions/_middleware.ts is missing — regenerating (pnpm og:middleware)…')
+    try {
+      execSync('pnpm og:middleware', { cwd: root, stdio: 'inherit' })
+    }
+    catch {
+      // fall through to the explicit failure below
+    }
+    if (!existsSync(middleware)) {
+      fail(`functions/_middleware.ts is missing and could not be regenerated — ${hint}; make sure .env contains S3_CUSTOM_DOMAIN`)
+    }
   }
 }
 
