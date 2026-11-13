@@ -107,11 +107,14 @@ function buildThumbnailPreloads(manifestRaw: string): string {
 
 export function manifestInjectPlugin(): Plugin {
   let mode: ManifestMode = 'inline'
-  let manifestJson = '{}'
+  let indexManifestJson = '{}'
+  let detailManifestJson = '{}'
   let fullManifestJson = '{}'
-  /** 形如 /photos-manifest.1a2b3c4d.json（首屏用，已裁剪） */
+  /** 形如 /photos-manifest.index.1a2b3c4d.json（首屏用） */
   let publicPath = ''
-  /** 形如 /photos-manifest-full.1a2b3c4d.json（调试页用，完整） */
+  /** 形如 /photos-manifest.detail.1a2b3c4d.json（viewer 打开时才取） */
+  let detailPublicPath = ''
+  /** 形如 /photos-manifest.full.1a2b3c4d.json（/manifest 调试页用） */
   let fullPublicPath = ''
   let outDir = ''
 
@@ -128,32 +131,91 @@ export function manifestInjectPlugin(): Plugin {
   }
 
   /**
-   * 首屏下发的那份 manifest 会剥掉前端从来不读的字段：
+   * 首屏只下发网格/筛选/排序/地图标记真的会读的字段。
    *
-   * - `digest`    —— 构建期的去重哈希，64 位随机 hex，**几乎不可压缩**，369 张就是 26 KB
-   * - `ogImageUrl` —— 分享卡片图，只有 Cloudflare 中间件在构建期用（它直接读源文件，不受影响）
+   * - 永不读：`digest`（64 位随机 hex，几乎不可压缩）、`ogImageUrl`（只有构建期的
+   *   Cloudflare 中间件用，它直接读源文件）
+   * - 只有打开大图才读：完整 `exif`、`location`、`toneAnalysis`、`keywords`、`regions`、`s3Key`
    *
-   * 两个字段在 `apps/web/src` 里都是 0 处引用，但合计占 manifest 体积的近 1/4。
-   * 完整版另存一份给 `/manifest` 调试页用，不进首屏。
+   * 后者进 `photos-manifest.detail.<hash>.json`，按 id 索引，viewer 打开时才取。
    */
   const FIELDS_UNUSED_BY_WEB = ['digest', 'ogImageUrl'] as const
 
-  function pruneManifestForWeb(manifestRaw: string): { pruned: string, full: string } {
+  /** 网格 hover 卡、列表视图、筛选、地图标记要用到的 exif 字段 */
+  const EXIF_FIELDS_FOR_INDEX = [
+    'Make',
+    'Model',
+    'LensMake',
+    'LensModel',
+    'Rating',
+    'FocalLength',
+    'FocalLengthIn35mmFormat',
+    'FNumber',
+    'Aperture',
+    'ShutterSpeed',
+    'ExposureTime',
+    'ISO',
+    'DateTimeOriginal',
+    'Orientation',
+    'GPSLatitude',
+    'GPSLongitude',
+    'GPSLatitudeRef',
+    'GPSLongitudeRef',
+  ] as const
+
+  type RawPhoto = Record<string, unknown>
+
+  function splitManifest(manifestRaw: string): { index: string, detail: string, full: string } {
     try {
-      const parsed = JSON.parse(manifestRaw) as { data?: Array<Record<string, unknown>> }
+      const parsed = JSON.parse(manifestRaw) as { data?: RawPhoto[] }
       const full = JSON.stringify(parsed)
       if (!Array.isArray(parsed.data)) {
-        return { pruned: full, full }
+        return { index: full, detail: '{}', full }
       }
+
+      const detail: Record<string, RawPhoto> = {}
       for (const photo of parsed.data) {
+        const id = String(photo.id)
+        const patch: RawPhoto = {}
+
+        if (photo.exif && typeof photo.exif === 'object') {
+          const indexExif: RawPhoto = {}
+          const restExif: RawPhoto = {}
+          for (const [key, value] of Object.entries(photo.exif)) {
+            if ((EXIF_FIELDS_FOR_INDEX as readonly string[]).includes(key)) {
+              indexExif[key] = value
+            }
+            else {
+              restExif[key] = value
+            }
+          }
+          photo.exif = indexExif
+          if (Object.keys(restExif).length > 0) {
+            patch.exif = restExif
+          }
+        }
+
+        for (const field of ['location', 'toneAnalysis', 'keywords', 'regions', 's3Key'] as const) {
+          if (photo[field] !== undefined && photo[field] !== null) {
+            patch[field] = photo[field]
+          }
+          delete photo[field]
+        }
+
         for (const field of FIELDS_UNUSED_BY_WEB) {
           delete photo[field]
         }
+
+        if (Object.keys(patch).length > 0) {
+          detail[id] = patch
+        }
       }
-      return { pruned: JSON.stringify(parsed), full }
+
+      return { index: JSON.stringify(parsed), detail: JSON.stringify(detail), full }
     }
-    catch {
-      return { pruned: '{}', full: '{}' }
+    catch (error) {
+      console.warn('Failed to split manifest:', error)
+      return { index: '{}', detail: '{}', full: '{}' }
     }
   }
 
@@ -163,12 +225,20 @@ export function manifestInjectPlugin(): Plugin {
       return publicPath
     }
     const { json } = readManifest()
-    const { pruned, full } = pruneManifestForWeb(json)
-    manifestJson = pruned
+    const { index, detail, full } = splitManifest(json)
+    indexManifestJson = index
+    detailManifestJson = detail
     fullManifestJson = full
-    const hash = createHash('sha256').update(pruned).digest('hex').slice(0, 8)
-    publicPath = `/${MANIFEST_FILE_BASENAME}.${hash}.json`
-    fullPublicPath = `/${MANIFEST_FILE_BASENAME}-full.${hash}.json`
+    // hash 覆盖三份内容，部署后任一变化都会换 URL
+    const hash = createHash('sha256')
+      .update(index)
+      .update(detail)
+      .update(full)
+      .digest('hex')
+      .slice(0, 8)
+    publicPath = `/${MANIFEST_FILE_BASENAME}.index.${hash}.json`
+    detailPublicPath = `/${MANIFEST_FILE_BASENAME}.detail.${hash}.json`
+    fullPublicPath = `/${MANIFEST_FILE_BASENAME}.full.${hash}.json`
     return publicPath
   }
 
@@ -193,8 +263,9 @@ export function manifestInjectPlugin(): Plugin {
       }
       const dir = options.dir ? path.resolve(options.dir) : outDir
       mkdirSync(dir, { recursive: true })
-      writeFileSync(path.join(dir, path.basename(publicPath)), manifestJson)
-      // 完整版只给 /manifest 调试页按需取，不进首屏
+      writeFileSync(path.join(dir, path.basename(publicPath)), indexManifestJson)
+      // detail 只在打开大图时取；full 只给 /manifest 调试页 —— 两者都不进首屏
+      writeFileSync(path.join(dir, path.basename(detailPublicPath)), detailManifestJson)
       writeFileSync(path.join(dir, path.basename(fullPublicPath)), fullManifestJson)
     },
 
@@ -231,11 +302,11 @@ export function manifestInjectPlugin(): Plugin {
       const url = ensurePublicPath()
       const tags = [
         // 图片 CDN 是另一个源，先把连接搭起来
-        buildImageOriginPreconnect(manifestJson),
+        buildImageOriginPreconnect(indexManifestJson),
         // 首屏缩略图先于 manifest/JS 开始下载（LCP 主要靠这条）
-        buildThumbnailPreloads(manifestJson),
+        buildThumbnailPreloads(indexManifestJson),
         `<link rel="preload" href="${url}" as="fetch" crossorigin="anonymous">`,
-        `<script id="manifest">window.__MANIFEST__=null;window.__MANIFEST_URL__=${JSON.stringify(url)};window.__MANIFEST_FULL_URL__=${JSON.stringify(fullPublicPath)}</script>`,
+        `<script id="manifest">window.__MANIFEST__=null;window.__MANIFEST_URL__=${JSON.stringify(url)};window.__MANIFEST_DETAIL_URL__=${JSON.stringify(detailPublicPath)};window.__MANIFEST_FULL_URL__=${JSON.stringify(fullPublicPath)}</script>`,
       ].join('')
 
       return html.replace(MANIFEST_PLACEHOLDER, tags)

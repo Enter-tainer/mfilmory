@@ -9,10 +9,15 @@
  *
  * 模块级 promise 保证只会请求一次；HTTP 缓存也会兜住重复调用。
  */
+import { photoLoader } from '@afilmory/data'
+
 let prefetchPromise: Promise<unknown> | null = null
 let scrollTriggerInstalled = false
 
 function startPrefetch(): Promise<unknown> {
+  // 和 viewer chunk 一起把 detail（完整 exif / location）也取下来：
+  // 这两份都只在大图路径用，一起取可以把两次往返合成一次等待。
+  void photoLoader.loadDetails()
   prefetchPromise ??= import('~/pages/(main)/photos/[photoId]/index').catch((error) => {
     // 预取失败不该影响任何用户路径：真正的导航会重新 import 一次并正常报错
     console.warn('[prefetch] viewer route failed to prefetch', error)
