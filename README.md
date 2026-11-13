@@ -50,6 +50,7 @@
   - 产物写到仓库根 `functions/_middleware.ts`，由 `builder.config.ts` 里的 `ogImagePlugin({ vendor: { type: 'cloudflare-middleware', storageURL } })` 触发
   - 该文件是**构建产物，不提交**（`.gitignore` 只忽略这精确一个路径）；内容由 `config.json` 的 `url` + `builder.config.ts` 的 `storageURL`（通常即 `.env` 的 `S3_CUSTOM_DOMAIN`）决定。`pnpm build` 会自动生成，也可以用 `pnpm og:middleware` 单独重生成（`-- --check` 校验磁盘上的文件是否最新，`--storage-url=…` 临时覆盖 CDN 地址）
   - 部署到 Cloudflare Pages 时 **project root 必须是仓库根**（或显式 `--functions-directory`），否则 `functions/` 不会被带上，OG 改写就失效
+  - 卡片长什么样（旧卡片 vs 照片直放、三端原生渲染、不同构图、首页卡片）：`docs/og/photo-straight-cards.webp`
 
 **3. 根级本地 ESLint 插件** — `plugins/eslint/`（i18n JSON 校验、no-debug、package.json 校验、递归排序），由 `eslint.config.mjs` 加载。
 
