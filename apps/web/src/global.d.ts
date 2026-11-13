@@ -21,7 +21,7 @@ declare global {
   const BUILT_DATE: string
   const GIT_COMMIT_HASH: string
 
-  const __MANIFEST__: AfilmoryManifest
+  const __MANIFEST__: AfilmoryManifest | null
   const __SITE_CONFIG__: Partial<SiteConfig>
 
   const __CONFIG__: InjectConfig
@@ -32,6 +32,10 @@ declare global {
 
   interface Window {
     __SITE_CONFIG__?: Partial<SiteConfig>
+    /** 构建期注入：外置 manifest 的 URL（内联模式下为 undefined） */
+    __MANIFEST_URL__?: string
+    /** 内联模式下的 manifest；外置模式启动时由 main.tsx 填入 */
+    __MANIFEST__?: AfilmoryManifest | null
   }
 }
 
@@ -47,8 +51,8 @@ declare global {
 
   export type ComponentType<P = object> = {
     className?: string
-  } & PropsWithChildren &
-    P
+  } & PropsWithChildren
+  & P
 }
 
 declare module 'react' {

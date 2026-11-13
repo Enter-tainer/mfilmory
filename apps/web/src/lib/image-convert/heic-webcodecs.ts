@@ -1,5 +1,3 @@
-import { heicTo } from 'heic-to'
-
 import type { HeifImage } from './heif'
 import { parseHeif } from './heif'
 
@@ -104,6 +102,7 @@ export async function convertHeicWithWebCodecs(file: Blob, type: string, quality
       // WebCodecs clips monochrome HEVC on some platforms. Decode only the
       // small auxiliary with libheif, preserving all gain values.
       try {
+        const { heicTo } = await import('heic-to')
         const bitmap = await heicTo({ blob: photo.gain.image.standalone(), type: 'bitmap' })
         try {
           if (Math.abs(bitmap.width / bitmap.height - canvas.width / canvas.height) > 0.01) {

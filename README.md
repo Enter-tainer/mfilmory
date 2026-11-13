@@ -148,6 +148,11 @@ pnpm lint            # eslint --fix
 
 照片本体与缩略图由 `builder.config.ts` 指向的存储/CDN 提供，构建产物里只有 manifest 与前端资源。
 
+照片 manifest 默认**外置**成内容 hash 命名的 `photos-manifest.<hash>.json`（HTML 里只有一条
+`preload` + `window.__MANIFEST__`/`window.__MANIFEST_URL__`），这样 HTML 只有几 KB 且能被边缘缓存；
+设 `AFILMORY_EMBED_MANIFEST=true` 可切回「整份内联进 HTML」的老行为（`pnpm dev` 默认内联）。
+静态资源的缓存头在 `apps/web/public/_headers`（Cloudflare Pages 格式），带 hash 的资源一年 immutable。
+
 #### Cloudflare Pages
 
 现网项目是 **`mgt-afilmory`**（`mgt-afilmory.pages.dev` + `gallery.mgt.moe`），历史部署全部是 **CLI 部署**、生产分支 `main`。

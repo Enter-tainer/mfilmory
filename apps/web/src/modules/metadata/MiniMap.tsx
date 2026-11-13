@@ -1,5 +1,6 @@
 import 'maplibre-gl/dist/maplibre-gl.css'
 
+import { setWorkerUrl } from 'maplibre-gl'
 import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import Map from 'react-map-gl/maplibre'
@@ -7,6 +8,10 @@ import { Link } from 'react-router'
 
 import { getMapStyle } from '~/lib/map/style'
 import { mapLibreWorkerUrl } from '~/lib/map/worker'
+
+// 与 components/ui/map/MapLibre.tsx 一样：worker 注册放在创建地图的模块里，
+// 不要让 ~/lib/map/worker 变成首屏依赖。
+setWorkerUrl(mapLibreWorkerUrl)
 
 interface MiniMapProps {
   latitude: number

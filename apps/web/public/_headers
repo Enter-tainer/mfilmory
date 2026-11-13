@@ -1,0 +1,29 @@
+# Cloudflare Pages headers（构建时从 apps/web/public/ 原样拷贝到 dist/ 根）
+
+# 带内容 hash 的构建产物：一年 + immutable，命中边缘后不再回源
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/vendor/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/fonts/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# 照片 manifest（内容 hash 命名，构建期生成）
+/photos-manifest.*
+  Cache-Control: public, max-age=31536000, immutable
+
+# 站点图标 / PWA 清单：内容不常变，给一天
+/*.png
+  Cache-Control: public, max-age=86400
+/*.ico
+  Cache-Control: public, max-age=86400
+/manifest.webmanifest
+  Cache-Control: public, max-age=86400
+
+# HTML 壳：必须每次校验，部署后立刻生效
+/
+  Cache-Control: public, max-age=0, must-revalidate
+/*.html
+  Cache-Control: public, max-age=0, must-revalidate

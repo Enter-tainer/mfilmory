@@ -14,7 +14,7 @@ import {
 } from '~/icons'
 import { isMobileDevice } from '~/lib/device-viewport'
 import { ImageLoaderManager } from '~/lib/image-loader-manager'
-import { formatExifData } from '~/modules/metadata'
+import { formatExifData } from '~/modules/metadata/formatExifData'
 import type { PhotoManifest } from '~/types/photo'
 
 export const MasonryPhotoItem = memo(({ data, width }: { data: PhotoManifest; width: number }) => {
