@@ -49,6 +49,35 @@ type ManifestPhoto = {
 const escapeAttribute = (value: string) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;')
 
 /**
+ * 图片 CDN 与站点不同源（R2 自定义域名），首次连接要额外付 DNS + TCP + TLS。
+ * preload 只是让请求早点排队，先 preconnect 能把这三次握手也提前做掉。
+ * 注意不要加 `crossorigin`：`<img>` 没有 crossorigin 属性，属于 no-cors 请求，
+ * 加了 crossorigin 反而会建立一条用不上的 CORS 连接。
+ */
+function buildImageOriginPreconnect(manifestRaw: string): string {
+  let photos: ManifestPhoto[]
+  try {
+    photos = (JSON.parse(manifestRaw) as { data?: ManifestPhoto[] }).data ?? []
+  }
+  catch {
+    return ''
+  }
+
+  const thumbnailUrl = photos.find(photo => typeof photo.thumbnailUrl === 'string')?.thumbnailUrl
+  if (!thumbnailUrl) {
+    return ''
+  }
+
+  try {
+    const { origin } = new URL(thumbnailUrl)
+    return origin ? `<link rel="preconnect" href="${escapeAttribute(origin)}">` : ''
+  }
+  catch {
+    return ''
+  }
+}
+
+/**
  * 取默认排序（拍摄时间倒序，与 `usePhotoViewer.filterAndSortPhotos` 一致）的前 N 张，
  * 生成 `<link rel="preload" as="image">`。拿不到 manifest 时静默退化成不 preload。
  */
@@ -163,6 +192,8 @@ export function manifestInjectPlugin(): Plugin {
       // 外置：HTML 里只留 URL + 一条 preload，让 JSON 和 HTML/CSS/JS 并行下载
       const url = ensurePublicPath()
       const tags = [
+        // 图片 CDN 是另一个源，先把连接搭起来
+        buildImageOriginPreconnect(manifestJson),
         // 首屏缩略图先于 manifest/JS 开始下载（LCP 主要靠这条）
         buildThumbnailPreloads(manifestJson),
         `<link rel="preload" href="${url}" as="fetch" crossorigin="anonymous">`,

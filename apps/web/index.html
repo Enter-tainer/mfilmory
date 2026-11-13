@@ -89,7 +89,6 @@
               box-shadow:
                 0 0 0 1px rgba(255, 255, 255, 0.1),
                 0 4px 16px rgba(0, 0, 0, 0.4);
-              animation: logoFade 1.2s cubic-bezier(0.16, 1, 0.3, 1) both;
               backdrop-filter: blur(10px);
             "
           >
@@ -120,7 +119,6 @@
                 letter-spacing: -0.025em;
                 color: rgba(255, 255, 255, 0.85);
                 margin: 0;
-                animation: titleFade 1.2s cubic-bezier(0.16, 1, 0.3, 1) 0.2s both;
               "
             >
               <%- title %>
@@ -132,7 +130,6 @@
                 margin: 0;
                 font-weight: 400;
                 letter-spacing: 0.01em;
-                animation: subtitleFade 1.2s cubic-bezier(0.16, 1, 0.3, 1) 0.4s both;
               "
             >
               <%- description %>
@@ -140,8 +137,8 @@
           </div>
 
           <!-- 加载动画 -->
-          <div style="margin-top: 1rem; animation: loaderFade 1.2s cubic-bezier(0.16, 1, 0.3, 1) 0.6s both">
-            <!-- 点状加载器 -->
+          <div style="margin-top: 1rem">
+            <!-- 点状加载器：这是唯一负责「还在加载」视觉暗示的元素，立刻可见 -->
             <div style="display: flex; gap: 0.5rem; align-items: center">
               <div
                 style="
@@ -176,49 +173,6 @@
 
         <!-- CSS 动画 -->
         <style>
-          @keyframes logoFade {
-            0% {
-              opacity: 0;
-              transform: translateY(-10px) scale(0.9);
-            }
-            100% {
-              opacity: 1;
-              transform: translateY(0) scale(1);
-            }
-          }
-
-          @keyframes titleFade {
-            0% {
-              opacity: 0;
-              transform: translateY(10px);
-            }
-            100% {
-              opacity: 1;
-              transform: translateY(0);
-            }
-          }
-
-          @keyframes subtitleFade {
-            0% {
-              opacity: 0;
-              transform: translateY(8px);
-            }
-            100% {
-              opacity: 1;
-              transform: translateY(0);
-            }
-          }
-
-          @keyframes loaderFade {
-            0% {
-              opacity: 0;
-              transform: translateY(6px);
-            }
-            100% {
-              opacity: 1;
-              transform: translateY(0);
-            }
-          }
 
           @keyframes dotPulse {
             0%,
