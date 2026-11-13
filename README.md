@@ -3,7 +3,7 @@
 **Afilmory 的纯静态 Web 前端 fork**：只保留「照片画廊 SPA + 照片处理流水线」，不带任何后端、SaaS、SSR 宿主或移动端。
 
 - 上游：<https://github.com/Afilmory/Afilmory>
-- 本 fork 的基线：`c392e065`（Enter-tainer/afilmory 的工作副本）
+- 本 fork 的基线：`cdeada39`（upstream/main，2026-11-13 同步；上游自 `c392e065` 起的 40 个提交全是 iOS 端改动，`apps/web` / `packages` 零变化）
 - 许可证：沿用上游 `LICENSE`（AGPL，见文件正文），修改部分同样以该许可证发布
 
 ## 保留了什么

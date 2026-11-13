@@ -63,5 +63,5 @@ apps/web (Vite + React 19 SPA) ←────────┘
 
 ## 已知遗留 / 下一步
 
-- `packages/builder/src/plugins/og-image-storage/index.ts` 仍引用已删除的 `be/apps/core/.../og/assets` 路径。该插件没有被 `builder.config.ts` 使用，仅作为死代码存在；如果要用 `og-image-storage`，需要先把素材目录改到本仓库内。
-- 上游 `main` 比本 fork 基线新 40 个提交（截至导入时），只包含在 `apps/web` 内的改动可用 `git cherry-pick` 挑选。
+- `packages/builder/src/plugins/og-image-storage/index.ts` 的 Satori 字体已从删掉的 `be/apps/core/src/modules/content/og/assets` 挪到 `packages/builder/assets/og`（`Geist-Medium.ttf` + `HarmonyOS_Sans_SC_Medium.ttf`），改这块时别再指回去。
+- 本 fork 已同步到 `upstream/main` `cdeada39`（2026-11）。上游 `c392e065..cdeada39` 的 40 个提交全是 `apps/mobile`（+ 移动端 CI/设计文档），`apps/web`、`packages`、`locales`、`scripts` 一个文件都没动；之后上游再有 `apps/web` 改动可直接 `git cherry-pick`。
