@@ -3,11 +3,12 @@
  * without running the whole photo pipeline.
  *
  * The file is normally produced as a side effect of `pnpm build` (builder's
- * og-image-storage plugin with the `cloudflare-middleware` vendor). This script
- * is the fast path for template/config tweaks and for CI checks:
+ * og-image-storage plugin with the `cloudflare-middleware` vendor). It is a
+ * git-ignored build artifact — never commit it. This script is the fast path
+ * for template/config tweaks and for verifying the on-disk file:
  *
  *   pnpm og:middleware                 # regenerate with the storage URL from .env (S3_CUSTOM_DOMAIN)
- *   pnpm og:middleware -- --check      # fail if the committed file is stale
+ *   pnpm og:middleware -- --check      # fail if the on-disk file is stale (local check, not CI)
  *   pnpm og:middleware -- --storage-url=https://cdn.example.com/gallery
  *
  * Env: OG_STORAGE_URL > --storage-url=… > S3_CUSTOM_DOMAIN from .env/process.env.
@@ -88,7 +89,7 @@ if (checkOnly) {
       console.info('✓ functions/_middleware.ts is up to date')
       process.exit(0)
     }
-    console.error('✗ functions/_middleware.ts is stale — run "pnpm og:middleware" and commit the result')
+    console.error('✗ functions/_middleware.ts is stale — run "pnpm build" (or "pnpm og:middleware") to regenerate it')
     process.exit(1)
   }
   catch (error) {
@@ -104,6 +105,6 @@ const after = await generateInto(root)
 console.info(
   after === before
     ? `✓ ${path.relative(root, target)} unchanged (storageURL=${storageURL})`
-    : `✓ ${path.relative(root, target)} updated (storageURL=${storageURL}) — commit the result`,
+    : `✓ ${path.relative(root, target)} updated (storageURL=${storageURL})`,
 )
 writeFileSync(target, after, 'utf8')

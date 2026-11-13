@@ -27,12 +27,11 @@ apps/web/src/generated-routes.ts
 cluster-report.html
 cluster-report.json
 
-# og-image-storage plugin output. `_middleware.ts` is produced by the
-# cloudflare-middleware OG vendor during a real `pnpm build`; it is committed
-# because CI (and any build that skips the photo pipeline) would otherwise
-# deploy a Cloudflare Pages project without the OG rewrite middleware.
-functions/*
-!functions/_middleware.ts
+# Cloudflare Pages Functions output. `functions/_middleware.ts` is generated
+# from the cloudflare-middleware OG vendor template during `pnpm build`, so it
+# is build output and must not be committed. Deploy only after a build that
+# regenerates it (scripts/deploy.mjs regenerates it when missing).
+functions/_middleware.ts
 
 # agent scratch
 .claude
