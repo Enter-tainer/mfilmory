@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import path, { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import sharp from 'sharp'
 
-const __dirname = path.dirname(new URL(import.meta.url).pathname)
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 // 创建圆角遮罩
 function createRoundedCornersMask(size: number, cornerRadius: number) {

@@ -87,7 +87,7 @@ vendor: {
     - `cloudflare-middleware`: requires `storageURL`; optional `siteConfigPath` to override the repo-root `config.json` location. After the build finishes, it writes a Cloudflare Pages middleware to `functions/_middleware.ts` using `url` from `config.json` and `storageURL` for the OG host.
 
 ## Dependencies
-- Uses fonts from `be/apps/core/src/modules/content/og/assets` (falls back to other repo paths). If fonts are missing, the plugin skips rendering for that run.
+- Uses fonts from `packages/builder/assets/og` (`Geist-Medium.ttf`, `HarmonyOS_Sans_SC_Medium.ttf`, also checked under legacy repo paths). If fonts are missing, the plugin skips rendering for that run.
 - Relies on the thumbnail storage plugin to provide in-memory thumbnail data when available; otherwise it will read a local/public or remote thumbnail URL.
 
 ## Notes

@@ -2,7 +2,6 @@
   "name": "@afilmory/web",
   "type": "module",
   "version": "0.0.1",
-  "packageManager": "pnpm@11.1.2",
   "description": "Photo gallery SPA",
   "license": "SEE LICENSE IN LICENSE.md",
   "repository": {
@@ -10,9 +9,7 @@
     "url": "https://github.com/Afilmory/Afilmory"
   },
   "scripts": {
-    "analyze": "analyzer=1 vite build",
     "build": "tsx scripts/build.ts",
-    "build:serve": "BUILD_FOR_SERVER_SERVE=1 vite build",
     "deploy:cloudflare": "pnpm build && pnpx wrangler pages deploy",
     "dev": "tsx scripts/dev.ts",
     "format": "prettier --write \"src/**/*.ts\" ",

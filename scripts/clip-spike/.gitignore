@@ -1,6 +1,0 @@
-.venv/
-.python-version
-uv.lock
-embeddings.npz
-__pycache__/
-*.pyc

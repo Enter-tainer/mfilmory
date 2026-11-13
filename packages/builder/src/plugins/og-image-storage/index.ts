@@ -20,7 +20,9 @@ import type { OgVendor } from './vendors/types'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(__dirname, '../../../../..')
-const ogAssetsDir = path.join(repoRoot, 'be/apps/core/src/modules/content/og/assets')
+// Fonts used by Satori/resvg when rendering OG images. They used to live in the
+// deleted `be/` backend; this fork keeps them next to the builder package.
+const ogAssetsDir = path.join(repoRoot, 'packages/builder/assets/og')
 
 const PLUGIN_NAME = 'afilmory:og-image'
 const RUN_STATE_KEY = 'state'

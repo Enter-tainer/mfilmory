@@ -2,7 +2,8 @@ import 'dotenv-expand/config'
 
 import { execSync } from 'node:child_process'
 import cluster from 'node:cluster'
-import { join } from 'node:path'
+import { existsSync } from 'node:fs'
+import { delimiter, dirname, join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
@@ -208,11 +209,27 @@ function environmentCheck() {
     execSync('perl -v', { stdio: 'ignore' })
 
     logger.main.info('Perl 已安装')
+    return
   }
-  catch (err) {
-    console.error(err)
-    logger.main.error('Perl 未安装，请安装 Perl 并重新运行')
+  catch {}
 
-    process.exit(1)
+  // Windows 上 Git for Windows / Strawberry Perl 自带的 perl 通常不在 PATH 里。
+  const perlCandidates = [
+    'C:\\Program Files\\Git\\usr\\bin\\perl.exe',
+    'C:\\Program Files\\Git\\mingw64\\bin\\perl.exe',
+    'C:\\Strawberry\\perl\\bin\\perl.exe',
+    'C:\\Perl64\\bin\\perl.exe',
+  ]
+  for (const candidate of perlCandidates) {
+    if (!existsSync(candidate)) {
+      continue
+    }
+    process.env.PATH = `${dirname(candidate)}${delimiter}${process.env.PATH ?? ''}`
+    logger.main.info(`Perl 未在 PATH 中，已使用：${candidate}`)
+    return
   }
+
+  // exiftool-vendored 自带不依赖系统 Perl 的 exiftool 二进制，只有少数外部工具
+  // 才真的需要 perl。这里降级为警告，避免 Windows 上直接中断整个构建。
+  logger.main.warn('未检测到 Perl（exiftool-vendored 不依赖它），继续构建。若照片处理失败，请安装 Perl 并加入 PATH。')
 }

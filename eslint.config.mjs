@@ -8,16 +8,9 @@ import recursiveSort from './plugins/eslint/eslint-recursive-sort.js'
 // In flat config, some large generated folders slipped through. To be extra safe,
 // put ignores in a top-level config object first, then append the rest.
 const rootIgnores = globalIgnores([
-  'apps/ssr/src/index.html.ts',
-  'apps/ssr/public/**',
   'apps/web/public/**',
-  'packages/docs/public/**',
-  'apps/mobile/ios/**',
-  'apps/mobile/android/**',
-  'apps/mobile/.expo/**',
-  'apps/mobile/expo-env.d.ts',
-  'apps/mobile/Tests/Fixtures/**',
-  'scripts/webgpu-hdr-spike/**',
+  'apps/web/src/data/**',
+  'apps/web/dist/**',
 ])
 
 const hyobanConfig = await defineConfig(
@@ -40,8 +33,6 @@ const hyobanConfig = await defineConfig(
     // config resolution warning by explicitly disabling auto-resolution.
     settings: {
       tailwindcss: {
-        // ESLint plugin will not attempt to resolve tailwind config
-        // which avoids repeated "Cannot resolve default tailwindcss config path" warnings.
         config: false,
       },
     },
@@ -87,8 +78,7 @@ const hyobanConfig = await defineConfig(
         {
           name: 'location',
           message:
-            'Since you don\'t use the same router instance in electron and browser, you can\'t use the global location to get the route info. \n\n'
-            + 'You can use `useLocaltion` or `getReadonlyRoute` to get the route info.',
+            'You can\'t use the global location to get the route info. Use `useLocation()` or `getReadonlyRoute()`.',
         },
       ],
     },
@@ -113,27 +103,6 @@ const hyobanConfig = await defineConfig(
       '@stylistic/jsx-self-closing-comp': 'error',
     },
   },
-
-  // Backend framework isn't React — disable React-specific hooks rule there.
-  {
-    files: ['be/packages/framework/**/*.{ts,tsx}'],
-    rules: {
-      'react-hooks/rules-of-hooks': 'off',
-    },
-  },
-
-  // Expo inlines EXPO_PUBLIC_* env vars only through literal `process.env` access,
-  // and expo-router route files / page definitions must export non-component values.
-  {
-    files: ['apps/mobile/**/*.{ts,tsx}'],
-    rules: {
-      'node/prefer-global/process': 'off',
-      'react-refresh/only-export-components': 'off',
-    },
-  },
-
-  // Redundant but harmless: keep a local ignore in case this block is used standalone somewhere
-  globalIgnores(['apps/ssr/src/index.html.ts', 'apps/ssr/public/**', 'apps/web/public/**', 'packages/docs/public/**']),
 )
 
 export default [

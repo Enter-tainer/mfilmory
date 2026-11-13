@@ -1,47 +1,36 @@
-# This workflow will do a clean install of node dependencies, build the source code and run tests across different versions of node
-# For more information see: https://help.github.com/actions/language-and-framework-guides/using-nodejs-with-github-actions
+# Build + type-check the static gallery
 
 name: Build
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   pull_request:
-    branches: [main, master]
+    branches: [main]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        node-version: [lts/*]
-
     steps:
-      - uses: actions/checkout@v7
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v7
-        with:
-          node-version: ${{ matrix.node-version }}
+      - uses: actions/checkout@v4
 
-      - name: Cache pnpm modules
-        uses: actions/cache@v6
-        env:
-          cache-name: cache-pnpm-modules
-        with:
-          path: ~/.pnpm-store
-          key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ matrix.node-version }}-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-build-${{ env.cache-name }}-${{ matrix.node-version }}-
+      - uses: pnpm/action-setup@v4
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v4
         with:
-          run_install: true
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install
+
+      # The manifest is normally produced by `pnpm build:manifest` (S3 / local
+      # photo pipeline). CI only needs the SPA to compile, so seed an empty one.
       - run: echo '{"version":"v2","data":[]}' > apps/web/src/data/photos-manifest.json
-      - name: Build web (generates routes)
+
+      # `vite build` also generates apps/web/src/generated-routes.ts.
+      - name: Build SPA
         run: pnpm exec vite build
         working-directory: ./apps/web
+
       - name: Type check
-        run: |
-          pnpm type-check
+        run: pnpm type-check

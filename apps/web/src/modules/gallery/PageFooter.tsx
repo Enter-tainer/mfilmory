@@ -1,6 +1,6 @@
 import { LinearBlur } from '@afilmory/ui'
 
-import siteConfig from '~/../../site.config'
+import siteConfig from '@config'
 
 export const PageFooter = () => {
   const { beian } = siteConfig

@@ -1,8 +1,8 @@
 {
-  "name": "Innei's Afilmory",
-  "title": "Innei's Afilmory",
-  "description": "Capturing beautiful moments in life, documenting daily warmth and emotions through my lens.",
-  "url": "https://afilmory.innei.in/",
+  "name": "My Gallery",
+  "title": "My Gallery",
+  "description": "A static photo gallery built with mfilmory.",
+  "url": "https://gallery.example.com/",
   "accentColor": "#007bff",
   "viewer": {
     "regions": {
@@ -11,9 +11,9 @@
     }
   },
   "author": {
-    "name": "Innei",
-    "url": "https://innei.in/",
-    "avatar": "https://cdn.jsdelivr.net/gh/Innei/static@master/avatar.png"
+    "name": "Your Name",
+    "url": "https://example.com/",
+    "avatar": "https://example.com/avatar.png"
   },
   "social": {
     "github": "",

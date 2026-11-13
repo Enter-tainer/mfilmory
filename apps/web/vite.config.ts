@@ -53,9 +53,12 @@ const ReactCompilerConfig = {
 }
 
 const ROOT = fileURLToPath(new URL('./', import.meta.url))
+// fast-glob requires forward slashes on Windows: a native `C:\...\src\pages`
+// pattern silently matches zero files and the SPA ends up with no routes.
+const toPosixPath = (p: string) => p.replaceAll('\\', '/')
 const routeGenPlugins: PluginOption[] = [
   routeBuilderPlugin({
-    pagePattern: `${resolve(ROOT, './src/pages')}/**/*.tsx`,
+    pagePattern: `${toPosixPath(resolve(ROOT, './src/pages'))}/**/*.tsx`,
     outputPath: `${resolve(ROOT, './src/generated-routes.ts')}`,
     enableInDev: true,
 

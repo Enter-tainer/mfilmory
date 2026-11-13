@@ -2,9 +2,6 @@ packages:
   - apps/**/*
   - packages/*
   - packages/*/*
-  - be
-  - be/packages/*
-  - be/apps/*
 
 minimumReleaseAge: 0
 

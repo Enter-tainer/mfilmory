@@ -9,10 +9,15 @@ export function localesJsonPlugin(): Plugin {
     enforce: 'pre',
 
     async transform(code, id) {
-      if (!id.includes('locales')) {
+      // Vite ids always use forward slashes; MONOREPO_ROOT_PATH is a native path
+      // (`\` on Windows), so normalise before comparing.
+      const normalizedId = id.replaceAll('\\', '/')
+      const normalizedRoot = MONOREPO_ROOT_PATH.replaceAll('\\', '/')
+
+      if (!normalizedId.includes('locales')) {
         return null
       }
-      if (!id.includes(MONOREPO_ROOT_PATH) || !id.endsWith('.json')) {
+      if (!normalizedId.includes(normalizedRoot) || !normalizedId.endsWith('.json')) {
         return null
       }
 

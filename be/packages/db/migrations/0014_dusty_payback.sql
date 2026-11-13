@@ -1,1 +1,0 @@
-ALTER TABLE "auth_user" ADD COLUMN "had_trial" boolean DEFAULT false NOT NULL;
