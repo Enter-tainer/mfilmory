@@ -108,8 +108,11 @@ function buildThumbnailPreloads(manifestRaw: string): string {
 export function manifestInjectPlugin(): Plugin {
   let mode: ManifestMode = 'inline'
   let manifestJson = '{}'
-  /** 形如 /photos-manifest.1a2b3c4d.json */
+  let fullManifestJson = '{}'
+  /** 形如 /photos-manifest.1a2b3c4d.json（首屏用，已裁剪） */
   let publicPath = ''
+  /** 形如 /photos-manifest-full.1a2b3c4d.json（调试页用，完整） */
+  let fullPublicPath = ''
   let outDir = ''
 
   function readManifest(): { text: string, json: string } {
@@ -124,15 +127,48 @@ export function manifestInjectPlugin(): Plugin {
     }
   }
 
+  /**
+   * 首屏下发的那份 manifest 会剥掉前端从来不读的字段：
+   *
+   * - `digest`    —— 构建期的去重哈希，64 位随机 hex，**几乎不可压缩**，369 张就是 26 KB
+   * - `ogImageUrl` —— 分享卡片图，只有 Cloudflare 中间件在构建期用（它直接读源文件，不受影响）
+   *
+   * 两个字段在 `apps/web/src` 里都是 0 处引用，但合计占 manifest 体积的近 1/4。
+   * 完整版另存一份给 `/manifest` 调试页用，不进首屏。
+   */
+  const FIELDS_UNUSED_BY_WEB = ['digest', 'ogImageUrl'] as const
+
+  function pruneManifestForWeb(manifestRaw: string): { pruned: string, full: string } {
+    try {
+      const parsed = JSON.parse(manifestRaw) as { data?: Array<Record<string, unknown>> }
+      const full = JSON.stringify(parsed)
+      if (!Array.isArray(parsed.data)) {
+        return { pruned: full, full }
+      }
+      for (const photo of parsed.data) {
+        for (const field of FIELDS_UNUSED_BY_WEB) {
+          delete photo[field]
+        }
+      }
+      return { pruned: JSON.stringify(parsed), full }
+    }
+    catch {
+      return { pruned: '{}', full: '{}' }
+    }
+  }
+
   /** 外置模式下计算产物路径（保持 buildStart / dev server 两条路径一致） */
   function ensurePublicPath(): string {
     if (publicPath) {
       return publicPath
     }
     const { json } = readManifest()
-    manifestJson = json
-    const hash = createHash('sha256').update(json).digest('hex').slice(0, 8)
+    const { pruned, full } = pruneManifestForWeb(json)
+    manifestJson = pruned
+    fullManifestJson = full
+    const hash = createHash('sha256').update(pruned).digest('hex').slice(0, 8)
     publicPath = `/${MANIFEST_FILE_BASENAME}.${hash}.json`
+    fullPublicPath = `/${MANIFEST_FILE_BASENAME}-full.${hash}.json`
     return publicPath
   }
 
@@ -158,6 +194,8 @@ export function manifestInjectPlugin(): Plugin {
       const dir = options.dir ? path.resolve(options.dir) : outDir
       mkdirSync(dir, { recursive: true })
       writeFileSync(path.join(dir, path.basename(publicPath)), manifestJson)
+      // 完整版只给 /manifest 调试页按需取，不进首屏
+      writeFileSync(path.join(dir, path.basename(fullPublicPath)), fullManifestJson)
     },
 
     configureServer(server) {
@@ -197,7 +235,7 @@ export function manifestInjectPlugin(): Plugin {
         // 首屏缩略图先于 manifest/JS 开始下载（LCP 主要靠这条）
         buildThumbnailPreloads(manifestJson),
         `<link rel="preload" href="${url}" as="fetch" crossorigin="anonymous">`,
-        `<script id="manifest">window.__MANIFEST__=null;window.__MANIFEST_URL__=${JSON.stringify(url)}</script>`,
+        `<script id="manifest">window.__MANIFEST__=null;window.__MANIFEST_URL__=${JSON.stringify(url)};window.__MANIFEST_FULL_URL__=${JSON.stringify(fullPublicPath)}</script>`,
       ].join('')
 
       return html.replace(MANIFEST_PLACEHOLDER, tags)
