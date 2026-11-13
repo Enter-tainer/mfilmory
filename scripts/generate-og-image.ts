@@ -38,8 +38,29 @@ async function downloadAndProcessThumbnail(thumbnailUrl: string, size = 150) {
       }
     }
 
-    // 如果是 URL，需要下载（这里先返回 null，后面可以添加网络下载功能）
-    console.warn(`Cannot download thumbnail from URL: ${thumbnailUrl}`)
+    // 远端 URL：优先用 photo pipeline 在 public/thumbnails 留下的本地缓存。
+    // 配了 thumbnail-storage 插件后 thumbnailUrl 是 R2 绝对地址，但仍然有同名本地文件，
+    // 这样构建期就不用为了 OG 卡再发一次网络请求（也避免网络抖动让卡片缺图）。
+    const baseName = decodeURIComponent(thumbnailUrl.split('/').pop() ?? '').replace(/\.[^.]+$/, '')
+    if (baseName) {
+      for (const extension of ['avif', 'webp', 'jpg', 'jpeg', 'png']) {
+        const cached = join(process.cwd(), 'public/thumbnails', `${baseName}.${extension}`)
+        if (existsSync(cached)) {
+          return await sharp(cached).resize(size, size, { fit: 'cover' }).png().toBuffer()
+        }
+      }
+    }
+
+    // 最后才走网络（sharp 能解 AVIF/WebP/JPEG）
+    if (/^https?:\/\//i.test(thumbnailUrl)) {
+      const response = await fetch(thumbnailUrl)
+      if (response.ok) {
+        const encoded = Buffer.from(await response.arrayBuffer())
+        return await sharp(encoded).resize(size, size, { fit: 'cover' }).png().toBuffer()
+      }
+    }
+
+    console.warn(`Cannot resolve thumbnail: ${thumbnailUrl}`)
     return null
   }
   catch (error) {
