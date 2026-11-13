@@ -107,14 +107,26 @@ pnpm build            # 把 manifest 内联进 SPA，产物在 apps/web/dist
 
 | 产物 | 格式 | 参数 | 说明 |
 | --- | --- | --- | --- |
-| 缩略图（网格，`600px` 宽） | **AVIF** | `quality: 70` | 网格里一格只显示 300–400px，q70 足够；全库约 16MB |
-| 占位图（阅览器，`1600px` 宽） | **AVIF** | `quality: 50` | 点开大图时先显示它，原图下完无缝替换。4K 全屏下明显比旧的 600px 占位清楚，单张体积与旧占位（600px JPEG q100）持平 |
+| 缩略图（网格，`500px` 宽） | **AVIF** | `quality: 70`, `effort: 6` | 网格一格最多显示 500 物理像素（手机 150 CSS@3x、iPad/Mac 250 CSS@2x、4K@100% 472px），所以 500 正好。实测 SSIMULACRA2 83.5 vs 旧 600px JPEG q100 的 85.6（98% 观感），体积 32KB vs 248KB |
+| 占位图（阅览器，长边 `2560`） | **AVIF** | `quality: 45`, `effort: 6` | 点开大图时先显示它，原图下完无缝替换。4K 全屏实测 S2 27.3 / XPSNR 37.8 / SSIM 0.80，旧 600px JPEG q100 占位只有 −16.1 / 33.9 / 0.70，而体积还小 17%。按**长边**而非宽度缩放，竖图不会白付 1.5 倍像素 |
 | OG 卡（分享图） | **WebP** | `quality: 90` | 1200×628；PNG 421KB → WebP ~33KB。**OG 永远不要用 AVIF**：跨平台实测只有 Facebook 支持 |
+
+编码器是 sharp（libvips 8.18.7 → libheif 1.23.5 → libaom 3.15.1）。`effort` 是 libaom 速度档（0–9），6 比默认 4 慢但同质量更小；改它会让所有产物重新编码。参数曲线和目视对比在 `docs/image-quality/`。
 
 - 缩略图文件名/扩展名统一由 `packages/builder/src/image/thumbnail.ts` 的 `getThumbnailFilename()` 提供，不要再硬编码 `.jpg`（上游 #259 就是这么坏的）。
 - 换格式要全量重生成：`pnpm build:manifest -- --force-thumbnails`。残留的旧格式文件由 `handleDeletedPhotos` 清理——只在新格式文件已存在时才删，避免 `--force-manifest`（不重生成缩略图）把唯一副本删掉。
-- 远端存储里的旧格式对象**不会**自动删（`thumbnail-storage` 把自己的前缀排除在扫描外）：用 `pnpm cleanup:assets` 统计、`pnpm cleanup:assets -- --delete` 清理。
+- 远端存储里的旧格式对象**不会**自动删（`thumbnail-storage` 把自己的前缀排除在扫描外）：用 `pnpm cleanup:assets` 统计，`-- --delete` 清缩略图，其他目录加 `--directory=.afilmory/og-images --keep=webp`。**先确认线上 manifest 已经不引用旧格式再删**。
 - OG 渲染链（satori → resvg）只可靠接受 PNG/JPEG 输入：WebP 会被静默丢弃，AVIF 直接抛 `t is not iterable`。所以 `og-image-storage` 会先用 sharp 把缩略图解码重编码成 PNG 再交给 satori，换缩略图格式时不要绕过这一步。
+- 原图与产物都有缓存：下载过的原图存在 `apps/web/src/data/.cache/originals/`，每张照片每种产物用哪组参数编码记录在 `.cache/asset-signatures.json`。只改一档参数时其他档不会重算。`MFILMORY_NO_ORIGINAL_CACHE=1` 跳过原图缓存，`MFILMORY_FORCE_ENCODE=1` 强制重编码。
+
+#### AVIF 作为**输入**（照片本身就是 .avif）
+
+`.avif` 在 `SUPPORTED_FORMATS` 里，可以跟 JPEG 一样入库，实测能完整走完 EXIF / 影调分析 / blurhash / 缩略图 / 占位图 / OG 卡。已知限制：
+
+- **10-bit AVIF 可以解码**。当前 sharp 预编译版带着 libaom 3.15.1 的高位深解码，10-bit 文件（如仓库里那张 3888×5184 的测试图）能正常出缩略图和直方图。上游 issue #109 里「预编译 sharp 不支持 10-bit AVIF、需要自己编 libvips」的结论对现在这个版本**不再成立**，`node-gyp` 那套不用带回来。
+- **AVIF 原生 HDR gain map 不支持**。`isHDR` 只认 JPEG Ultra HDR 的三个标记（`MPImageType=Gain Map Image`、URN `urn:iso:std:iso:ts:21496:-1`、EXIF `ContainerDirectory` 里的 `GainMap` 项）。带 `tmap` 项的 AVIF 会被当作 SDR 处理，`isHDR` 为 `false`；阅览器侧的 gain map 渲染依赖上游尚未合并的 PR #300 / #301。
+- **JPEG XL 不支持**（上游 issue #250 的另一半仍未做）。
+- 多帧 / 动画 AVIF 没有处理，只会用第一帧。
 
 ### 开发
 
