@@ -1,4 +1,8 @@
 # Cloudflare Pages headers（构建时从 apps/web/public/ 原样拷贝到 dist/ 根）
+#
+# 为什么这里有两条前缀规则值得单独说明：`_routes.json` 把 Pages Function（OG 中间件）
+# 限制在 `/photos/*`，其余路径都是纯静态资源；但静态资源也只有当 Cache-Control 允许时
+# 才会真正命中边缘缓存，否则 cf-cache-status 会一直是 MISS/DYNAMIC。
 
 # 带内容 hash 的构建产物：一年 + immutable，命中边缘后不再回源
 /assets/*
@@ -10,7 +14,7 @@
 /fonts/*
   Cache-Control: public, max-age=31536000, immutable
 
-# 照片 manifest（内容 hash 命名，构建期生成）
+# 照片 manifest（内容 hash 命名，构建期生成）：index / detail / full 三份都走这条
 /photos-manifest.*
   Cache-Control: public, max-age=31536000, immutable
 
@@ -22,8 +26,11 @@
 /manifest.webmanifest
   Cache-Control: public, max-age=86400
 
-# HTML 壳：必须每次校验，部署后立刻生效
+# HTML 壳：浏览器每次都校验（部署后立刻生效），但**允许边缘缓存**。
+#   s-maxage=60                  —— 边缘缓存 1 分钟，命中期内 TTFB 只剩一次边缘 RTT
+#   stale-while-revalidate=86400 —— 过期后边缘先用旧副本响应、后台回源刷新，用户永远不等
+# 合起来：部署后最多 60 秒全量可见，命中窗口之外也仍然快。
 /
-  Cache-Control: public, max-age=0, must-revalidate
+  Cache-Control: public, max-age=0, s-maxage=60, stale-while-revalidate=86400
 /*.html
-  Cache-Control: public, max-age=0, must-revalidate
+  Cache-Control: public, max-age=0, s-maxage=60, stale-while-revalidate=86400

@@ -153,6 +153,15 @@ pnpm lint            # eslint --fix
 设 `AFILMORY_EMBED_MANIFEST=true` 可切回「整份内联进 HTML」的老行为（`pnpm dev` 默认内联）。
 静态资源的缓存头在 `apps/web/public/_headers`（Cloudflare Pages 格式），带 hash 的资源一年 immutable。
 
+**HTML 想真正命中边缘缓存，`_headers` 和 `_routes.json` 必须配套**：
+
+- `apps/web/public/_routes.json` 只把 `/photos/*` 交给 Pages Function（OG 中间件）。旧配置写的是
+  `"include": ["/*"]`，于是**每条** HTML 请求都会进 Function，响应 `cf-cache-status` 永远是
+  `DYNAMIC`，实测 TTFB ≈ 760 ms。
+- `_headers` 里 HTML 用的是 `max-age=0, s-maxage=60, stale-while-revalidate=86400`：浏览器每次校验，
+  边缘缓存 60 秒，过期后先用旧副本、后台刷新。两条一起才生效——只改 `_routes.json` 时
+  `max-age=0, must-revalidate` 依然让边缘拒绝缓存。
+
 #### Cloudflare Pages
 
 现网项目是 **`mgt-afilmory`**（`mgt-afilmory.pages.dev` + `gallery.mgt.moe`），历史部署全部是 **CLI 部署**、生产分支 `main`。
@@ -215,4 +224,5 @@ git fetch upstream
 ```
 
 上游的 `apps/web` 改动通常可以 cherry-pick；涉及 `be/`、`apps/ssr`、`apps/mobile` 的提交需要手工裁剪。
+
 
