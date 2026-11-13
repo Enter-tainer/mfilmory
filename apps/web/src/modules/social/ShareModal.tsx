@@ -12,8 +12,8 @@ import type { PhotoManifest } from '~/types/photo'
 import { CopyButton } from './CopyButton'
 import { ShareActionButton } from './ShareActionButton'
 
-// OG image aspect ratio: 1200:628 (from og.renderer.tsx)
-const OG_ASPECT_RATIO = 1200 / 628
+// 分享图比例 1200:630（照片直放，见 packages/builder/src/plugins/og-image-storage/photo-og.ts）
+const OG_ASPECT_RATIO = 1200 / 630
 
 interface ShareModalTriggerProps {
   photo: PhotoManifest

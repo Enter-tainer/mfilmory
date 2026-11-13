@@ -1,96 +1,103 @@
 # OG Image Storage Plugin
 
-This plugin renders Open Graph (OG) images for each processed photo and uploads them to remote storage.
+分享图（Open Graph card）插件。
 
-## Examples
+卡片**只有照片**：把 2560px 的阅览器占位图缩成 1200×630 WebP 上传到存储，没有黑底、边框、站名，也不画标题和 EXIF。
+卡片上的文字全部交给分享平台从页面 meta 原生渲染，所以每张照片页的 `og:title` / `og:description` / `<title>` 由
+Cloudflare 中间件在边缘按 manifest 注入（SPA 每张照片返回的是同一份 `index.html`）。
 
-### Plugin usage
+## 卡片长什么样
 
-import `ogImagePlugin` and add it to your builder config's plugins array.
+- 单张照片页：照片满幅铺进 1.91:1（Twitter/X、WhatsApp、Telegram、Facebook、iMessage 的通用卡片比例），
+  用 `sharp.strategy.attention` 挑裁切位置，避免竖构图居中裁切切掉主体。
+- 首页/站点级卡片：从最近的照片里挑第一张适合做横幅的横向照片（1.45:1 – 2.6:1），同样满幅 1200×630。
+
+文字部分（`photo-text.ts`）：
+
+```
+title       ← 拍摄地点（或照片本来的名字）           → og:title / twitter:title / <title>
+description ← EXIF 明细，一行一个 emoji 字段        → og:description / twitter:description
+               📸: SONY ILCE-7RM5 / Viltrox 55mm F1.8 FE
+               📝: 55mm, f/3.5, 1/3200s, ISO 100
+               📅: 2026-10-02 15:08:41
+               🗺: 丹东镇, 丹巴县, 甘孜藏族自治州, 四川省, 626300, 中国
+               📍: 31.047980° N, 101.349466° E
+summary     ← 单行版，给搜索结果摘要                 → meta[name=description]
+```
+
+标题只在照片标题「像人写的」时候才用它：这个库 369 张照片里只有 1 张真有标题，其余都是
+`20260103 MGT07818`、`DSC09104 已增强 降噪` 这类相机/软件产出的串，所以默认用反向地理编码出的地名。
+
+## 用法
+
 ```ts
-import { defineBuilderConfig, thumbnailStoragePlugin, ogImagePlugin } from '@afilmory/builder'
+import { defineBuilderConfig, ogImagePlugin, thumbnailStoragePlugin } from '@afilmory/builder'
 
 export default defineBuilderConfig(() => ({
-    storage: {
-        ...
-    },
-	plugins: [
-		thumbnailStoragePlugin(),
-        ogImagePlugin(
-            {
-                vendor: {
-                    type: 'cloudflare-middleware', // OG image vendor type
-                    storageURL: 'https://your-og-storage.example.com',
-                    siteConfigPath: './config.json', // optional: defaults to repo root config.json
-                },
-            }
-        )
-	],
+  storage, // 与 build:manifest 用同一套存储配置
+  plugins: [
+    thumbnailStoragePlugin(),
+    ogImagePlugin({
+      vendor: {
+        type: 'cloudflare-middleware',
+        storageURL: 'https://your-cdn.example.com', // 提供 .afilmory/og-images/* 的 CDN / 对象存储
+        siteConfigPath: './config.json', // 可选，默认仓库根 config.json
+        manifestPath: 'apps/web/src/data/photos-manifest.json', // 可选，默认就是这个
+      },
+    }),
+  ],
 }))
 ```
 
-The first time you use the plugin, you need to force re-build your manifest to generate and upload OG images for all photos:
+第一次使用（或改了卡片参数）需要重跑 manifest 才会补齐已有照片的分享图：
+
 ```bash
- npm run build:manifest -- --force-manifest
+pnpm build:manifest -- --force-manifest
 ```
 
+`--force-manifest` 不会重新生成缩略图/占位图，只重渲染分享图并重新上传。
 
-### Use generated Cloudflare Pages Middleware
+## Cloudflare Pages 中间件
 
-If you are using Cloudflare Pages to host your Afilmory, you can use the generated middleware to rewrite the OG image meta tags on photo pages to point to the generated OG images stored in your storage.
+`vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk` 生成仓库根的
+`functions/_middleware.ts`（**构建产物，不提交**）。`pnpm build` 会自动生成，也可以单独重生成：
 
-You only need to adjust the `storageURL` to your own OG image URL prefix and run `pnpm build`. This will generate the middleware code at `functions/_middleware.ts`. Then you can run `wrangler` to deploy your Cloudflare Pages site with the new middleware, it will automatically detect the middleware file:
 ```bash
-npx wrangler pages deploy apps/web/dist/ --project-name=YOUR_PROJECT_NAME
-
-# You should see outputs like:
-# ...
-# ✨ Uploading _routes.json
-# ...
+pnpm og:middleware                 # 用 .env 里的 S3_CUSTOM_DOMAIN 作 storageURL
+pnpm og:middleware -- --check      # 校验磁盘文件是否最新
 ```
 
-`storageURL` should be the origin/host where OG images are served (for example, a CDN or object storage domain without a path).
+它做四件事（都只针对 `/photos/:slug` 的 HTML 响应）：
 
-#### Cloudflare middleware vendor configuration
+1. 把站点级卡片的 `og:image` / `twitter:image` 换成该照片在 R2 的分享图；
+2. 注入 `og:title` / `twitter:title`、`og:description` / `twitter:description`；
+3. 把 `meta[name=description]` 换成单行摘要，`<title>` 换成 `{标题} | {站名}`；
+4. 把 `og:url` / `twitter:url` 换成本页 URL。
 
-```ts
-vendor: {
-    type: 'cloudflare-middleware',
-    storageURL: 'https://cdn.example.com', // OG images bucket/CDN origin
-    siteConfigPath: './config.json', // optional, defaults to repo root config.json
-}
-```
+整库文案表在构建期内嵌进中间件（`PHOTO_TEXT`，369 张约 55KB），所以边缘函数不需要额外请求。
+manifest 读不到时只换图、文字保持站点级，不会让中间件报错。
 
-- The middleware is written to `functions/_middleware.ts` at repo root.
-- `storageURL` points to the base URL that serves `.afilmory/og-images/*`.
-- `siteConfigPath` (optional) is resolved from the repo root when relative; defaults to `config.json` at the repo root.
-- To verify: run `pnpm build`, check that `functions/_middleware.ts` is generated, and ensure the OG base inside matches your `storageURL`.
+部署到 Cloudflare Pages 时 **project root 必须是仓库根**（或显式 `--functions-directory`），
+否则 `functions/` 不会被带上，改写就失效。
 
+## 配置
 
+- `enable` (boolean)：开关，默认 `true`。
+- `directory` (string)：远端目录前缀，默认 `.afilmory/og-images`。
+- `storageConfig` (storage config)：覆盖存储配置，默认用 builder 当前存储。
+- `contentType` (string)：上传 MIME，默认 `image/webp`。
+- `vendor` (object)：可选自动化。
+  目前只有 `cloudflare-middleware`：
+  - `storageURL`（必填）：提供 `.afilmory/og-images` 的地址；
+  - `siteConfigPath`（可选）：站点配置路径，默认仓库根 `config.json`；
+  - `manifestPath`（可选）：manifest 路径，默认 `apps/web/src/data/photos-manifest.json`。
 
-## How it works
-- Hooks into the builder after each photo is processed.
-- Loads site branding from `config.json` (or provided path) and falls back to simple defaults.
-- Reuses the generated thumbnail (buffer or URL) as the image source, avoiding extra reads of the original file.
-- Injects light EXIF/context (title, date, focal length, aperture, ISO, shutter speed, camera) into the card.
-- Renders the card with `@afilmory/og-renderer` (Satori + resvg) using bundled fonts, then uploads the PNG to storage.
-- Caches uploads and public URLs within a single run so repeated work is skipped.
+## 实现要点
 
-## Configuration
-- `enable` (boolean): turn the plugin on/off. Defaults to `true`.
-- `directory` (string): remote path prefix. Defaults to `.afilmory/og-images`.
-- `storageConfig` (storage config): optional override; otherwise uses the builder's current storage.
-- `contentType` (string): MIME type for uploads. Defaults to `image/png`.
-- `siteName` / `accentColor` (strings): optional overrides for branding.
-- `siteConfigPath` (string): path to a site config JSON; defaults to `config.json` at the repo root (relative paths are resolved from the repo root).
-- `vendor` (object): optional vendor automation. Current vendor types:
-    - `cloudflare-middleware`: requires `storageURL`; optional `siteConfigPath` to override the repo-root `config.json` location. After the build finishes, it writes a Cloudflare Pages middleware to `functions/_middleware.ts` using `url` from `config.json` and `storageURL` for the OG host.
-
-## Dependencies
-- Uses fonts from `packages/builder/assets/og` (`Geist-Medium.ttf`, `HarmonyOS_Sans_SC_Medium.ttf`, also checked under legacy repo paths). If fonts are missing, the plugin skips rendering for that run.
-- Relies on the thumbnail storage plugin to provide in-memory thumbnail data when available; otherwise it will read a local/public or remote thumbnail URL.
-
-## Notes
-- Unsupported storage provider: `eagle` (the plugin disables itself in this case).
-- Remote keys are cached; forcing (`isForceMode` or `isForceManifest`) re-renders and re-uploads.
-- OG URLs are attached to `item.ogImageUrl` on the manifest entries.
+- **源图用占位图（preview，长边 2560）而不是 600px 缩略图**：1200px 宽的卡片用缩略图会被放大到发糊。
+  两者都由上一个插件（`thumbnail-storage`）在内存里准备好，正常构建不额外读盘或联网；只有都缺失时才回落到
+  `public/previews` / `public/thumbnails` 本地缓存，最后一招才走 CDN。
+- 换卡片参数（尺寸、WebP 质量）时记得同步 `photo-og.ts` 里的常量——asset signature 会据此判定是否需要
+  重渲染（`.cache/asset-signatures.json` 的 `og:` 键）。
+- 不支持 Eagle 存储（插件会自动禁用）。
+- 分享图 URL 写回 manifest 的 `ogImageUrl` 字段。
