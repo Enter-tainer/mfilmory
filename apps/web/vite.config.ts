@@ -69,10 +69,21 @@ const staticWebBuildPlugins: PluginOption[] = [
   manifestInjectPlugin(),
   siteConfigInjectPlugin(),
   photosStaticPlugin(),
+  // PWA service worker has been retired: it provided no offline capability (navigateFallback was
+  // disabled and index.html was never precached) while its workbox precache could permanently poison
+  // a chunk URL — Cloudflare Pages answers a missing asset with `200 text/html`, workbox only rejects
+  // `status >= 400`, and `assets/**` entries carried `revision: null`, so the SPA shell was cached
+  // under the `.js` key forever. `selfDestroying` ships a worker that unregisters itself
+  // and deletes every Cache Storage entry on activate, healing already-affected clients;
+  // `injectRegister: false` stops emitting `registerSW.js`, which would otherwise re-register the
+  // worker on every page load. Keep `manifest` — installability does not require a service worker.
+  // To restore PWA support, drop `selfDestroying` and `injectRegister`, restore `registerType` and
+  // the previous `workbox` block from git history.
   VitePWA({
     base: '/',
     scope: '/',
-    registerType: 'autoUpdate',
+    selfDestroying: true,
+    injectRegister: false,
     includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
     manifest: {
       name: siteConfig.title,
@@ -98,47 +109,6 @@ const staticWebBuildPlugins: PluginOption[] = [
           src: 'apple-touch-icon.png',
           sizes: '180x180',
           type: 'image/png',
-        },
-      ],
-    },
-    workbox: {
-      maximumFileSizeToCacheInBytes: 10 * 1024 * 1024, // 10MB
-      navigateFallback: '',
-      globPatterns: ['**/*.{js,css,ico,png,svg,webp}'],
-      globIgnores: ['**/*.{jpg,jpeg}'], // 忽略大图片文件
-      runtimeCaching: [
-        {
-          urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-          handler: 'CacheFirst',
-          options: {
-            cacheName: 'google-fonts-cache',
-            expiration: {
-              maxEntries: 10,
-              maxAgeSeconds: 60 * 60 * 24 * 365, // <== 365 days
-            },
-          },
-        },
-        {
-          urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
-          handler: 'CacheFirst',
-          options: {
-            cacheName: 'gstatic-fonts-cache',
-            expiration: {
-              maxEntries: 10,
-              maxAgeSeconds: 60 * 60 * 24 * 365, // <== 365 days
-            },
-          },
-        },
-        {
-          urlPattern: /\.(?:png|jpg|jpeg|svg|webp)$/,
-          handler: 'CacheFirst',
-          options: {
-            cacheName: 'images-cache',
-            expiration: {
-              maxEntries: 100,
-              maxAgeSeconds: 60 * 60 * 24 * 30, // <== 30 days
-            },
-          },
         },
       ],
     },
