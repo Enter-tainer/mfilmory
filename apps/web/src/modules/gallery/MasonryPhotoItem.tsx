@@ -19,13 +19,16 @@ import { formatExifData } from '~/modules/metadata/formatExifData'
 import type { PhotoManifest } from '~/types/photo'
 
 /**
- * 前 N 张（首屏大致能看见的范围）用高优先级加载，剩下的降到 low。
+ * 前 N 张用高优先级 + `loading="eager"`，其余降到 `low`。
  *
- * 网格里所有缩略图都是 `loading="lazy"` 且同优先级时，浏览器会一次性发起 ~20 个
- * 同权重请求平摊带宽，LCP 那张要等所有请求各分到一勺才完成。给首屏的几张提优先级、
- * 其余降级后，LCP 候选图能先拿到大部分带宽。
+ * 网格里所有缩略图同权重时，浏览器会一次性发起 ~20 个请求平摊带宽，LCP 那张要等所有
+ * 请求各分到一勺才完成。给首屏几张提优先级后，LCP 候选图能先拿到大部分带宽。
+ *
+ * N 必须和 `manifest-inject` 里的 `PRELOADED_THUMBNAIL_COUNT` 对齐：HTML 里 preload 的
+ * 就是这 4 张，再多标 high 只会让它们互相抢带宽。
+ * （本地 10 次测量的中位数差异在噪声内，均值上 4 比 8 快约 100 ms。）
  */
-const EAGER_IMAGE_COUNT = 8
+const EAGER_IMAGE_COUNT = 4
 
 export const MasonryPhotoItem = memo(({
   data,
@@ -359,3 +362,8 @@ export const MasonryPhotoItem = memo(({
     </m.div>
   )
 })
+
+
+
+
+
