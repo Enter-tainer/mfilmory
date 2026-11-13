@@ -4,7 +4,8 @@
 
 - 上游：<https://github.com/Afilmory/Afilmory>
 - 本 fork 的基线：`cdeada39`（upstream/main，2026-11-13 同步；上游自 `c392e065` 起的 40 个提交全是 iOS 端改动，`apps/web` / `packages` 零变化）
-- 许可证：沿用上游 `LICENSE`（AGPL，见文件正文），修改部分同样以该许可证发布
+- 许可证：沿用上游 `LICENSE` —— **Attribution Network License (ANL) v1.0**：库/可复用模块为 MIT，应用（Project Code）为 AGPL-3.0-or-later **附加 §7 的 UI 署名要求**；本 fork 的修改同样按该许可发布
+- ⚠️ ANL §4.1 要求在交互界面的显眼位置（About / Footer / Settings 等）展示 `Powered by … — Source … — License: AGPL-3.0-or-later`。当前上游 SPA 源码里**没有**内建的署名位置（`git grep "Powered by" apps/web/src` 为空），公开部署前建议在 About/Footer 里补一处
 
 ## 保留了什么
 
