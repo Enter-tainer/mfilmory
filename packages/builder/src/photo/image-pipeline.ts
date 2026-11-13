@@ -9,6 +9,8 @@ import sharp from 'sharp'
 
 import type { BuilderOptions } from '../builder/builder.js'
 import { extractXmpMetadataFromExif } from '../image/exif.js'
+import { generatePreview, getPreviewFilename } from '../image/preview.js'
+import { getOriginalWithCache } from './original-cache.js'
 import {
   convertBmpToJpegSharpInstance,
   getImageMetadataWithSharp,
@@ -17,7 +19,7 @@ import {
 } from '../image/processor.js'
 import { getThumbnailFilename } from '../image/thumbnail.js'
 import type { PluginRunState } from '../plugins/manager.js'
-import { THUMBNAIL_PLUGIN_DATA_KEY } from '../plugins/thumbnail-storage/shared.js'
+import { PREVIEW_PLUGIN_DATA_KEY, THUMBNAIL_PLUGIN_DATA_KEY } from '../plugins/thumbnail-storage/shared.js'
 import type { S3ObjectLike } from '../types/s3.js'
 import { shouldProcessPhoto } from './cache-manager.js'
 import { processExifData, processThumbnailAndBlurhash, processToneAnalysis } from './data-processors.js'
@@ -60,8 +62,9 @@ export async function preprocessImage(
   const { storageManager, prefetchedBuffers } = getPhotoExecutionContext()
 
   try {
-    // 获取图片数据
-    const rawImageBuffer = prefetchedBuffers?.get(photoKey) ?? (await storageManager.getFile(photoKey))
+    // 获取图片数据（优先读本地原图缓存，避免反复从 S3 下载 3GB）
+    const rawImageBuffer = prefetchedBuffers?.get(photoKey)
+      ?? (await getOriginalWithCache(photoKey, () => storageManager.getFile(photoKey)))
     if (!rawImageBuffer) {
       loggers.image.error(`无法获取图片数据：${photoKey}`)
       return null
@@ -196,6 +199,22 @@ export async function executePhotoProcessingPipeline(
       localUrl: thumbnailResult.thumbnailUrl,
     }
 
+    // 3b. 处理阅览器占位图（1600px AVIF，比缩略图大一级，供大图加载前显示）
+    const { limitInputPixels } = getPhotoExecutionContext().builder.getConfig().system.processing
+    const previewResult = await generatePreview(
+      imageBuffer,
+      photoId,
+      options.isForceMode || options.isForceThumbnails,
+      !options.dryRun,
+      limitInputPixels,
+    )
+    context.pluginData[PREVIEW_PLUGIN_DATA_KEY] = {
+      photoId,
+      fileName: getPreviewFilename(photoId),
+      buffer: previewResult.previewBuffer,
+      localUrl: previewResult.previewUrl,
+    }
+
     // 4. 处理 EXIF 数据
     const exifData = await processExifData(imageBuffer, imageData.rawBuffer, photoKey, existingItem, options)
     const exiftoolXmpMetadata
@@ -244,6 +263,7 @@ export async function executePhotoProcessingPipeline(
       tags: options.xmpKeywordsEnabled ? mergeUniqueTags(photoInfo.tags, xmpKeywords) : photoInfo.tags,
       originalUrl: await storageManager.generatePublicUrl(photoKey),
       thumbnailUrl: thumbnailResult.thumbnailUrl,
+      previewUrl: previewResult.previewUrl,
       thumbHash: thumbnailResult.thumbHash ? compressUint8Array(thumbnailResult.thumbHash) : null,
       width: metadata.width,
       height: metadata.height,

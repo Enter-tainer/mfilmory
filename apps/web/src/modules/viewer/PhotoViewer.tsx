@@ -130,7 +130,7 @@ export const PhotoViewer = ({
           id: currentPhoto.id,
           width: currentPhoto.width,
           height: currentPhoto.height,
-          previewSrc: currentPhoto.thumbnailUrl,
+          previewSrc: currentPhoto.previewUrl || currentPhoto.thumbnailUrl,
           fullSrc: currentPhoto.originalUrl,
           thumbHash: currentPhoto.thumbHash,
         }
@@ -560,7 +560,7 @@ export const PhotoViewer = ({
                               />
                             )}
                             <img
-                              src={currentPhoto.thumbnailUrl || currentPhoto.originalUrl}
+                              src={currentPhoto.previewUrl || currentPhoto.thumbnailUrl || currentPhoto.originalUrl}
                               alt=""
                               className="absolute inset-0 h-full w-full object-contain"
                               draggable={false}
@@ -618,7 +618,7 @@ export const PhotoViewer = ({
                                     loadingIndicatorRef={loadingIndicatorRef}
                                     isCurrentImage={isCurrentImage}
                                     src={photo.originalUrl}
-                                    thumbnailSrc={photo.thumbnailUrl}
+                                    thumbnailSrc={photo.previewUrl || photo.thumbnailUrl}
                                     alt={photo.title}
                                     width={isCurrentImage ? currentPhoto.width : undefined}
                                     height={isCurrentImage ? currentPhoto.height : undefined}

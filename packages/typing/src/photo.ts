@@ -105,6 +105,8 @@ export interface PhotoManifestItem extends PhotoInfo {
   originalUrl: string
   format: string
   thumbnailUrl: string
+  /** 阅览器占位图（比缩略图大一级，点开大图时先显示它，原图加载完再替换） */
+  previewUrl?: string | null
   ogImageUrl?: string | null
   thumbHash: string | null
   width: number

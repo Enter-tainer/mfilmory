@@ -6,6 +6,7 @@ import type { ThumbnailResult } from '@afilmory/typing'
 import sharp from 'sharp'
 
 import { getGlobalLoggers } from '../photo/logger-adapter.js'
+import { hardForceEncode, signatureMatches, writeSignature } from './asset-signature.js'
 import { generateBlurhash } from './blurhash.js'
 
 // 常量定义
@@ -20,8 +21,13 @@ const THUMBNAIL_DIR = path.join(workdir, 'public/thumbnails')
  */
 export const THUMBNAIL_EXTENSION = 'avif'
 export const THUMBNAIL_MIME_TYPE = 'image/avif'
-export const THUMBNAIL_QUALITY = 80
-export const THUMBNAIL_WIDTH = 600
+export const THUMBNAIL_QUALITY = 70
+/**
+ * 网格一格的实际物理像素（按 MasonryView 的列宽算法 + 常见 DPR 推算）：
+ * 手机 2 列 150 CSS @3x ≈ 450px；iPad/Mac 250 CSS @2x = 500px；4K@150% 约 469px。
+ * 常见设备最大约 500 物理像素，所以 512 足够（再小会在 MacBook/iPad @2x 上露馅）。
+ */
+export const THUMBNAIL_WIDTH = 500
 
 /** 缩略图文件名。所有调用方都应走这里，不要再硬编码扩展名（上游 #259）。 */
 export function getThumbnailFilename(photoId: string): string {
@@ -116,7 +122,7 @@ async function generateNewThumbnail(
       .resize(THUMBNAIL_WIDTH, null, {
         withoutEnlargement: true,
       })
-      .avif({ quality: THUMBNAIL_QUALITY })
+      .avif({ quality: THUMBNAIL_QUALITY, effort: 6 })
       .toBuffer()
 
     // 保存到文件
@@ -154,8 +160,10 @@ export async function generateThumbnailAndBlurhash(
       await ensureThumbnailDir()
     }
 
-    // 如果不是强制模式且缩略图已存在，尝试复用现有文件
-    if (!forceRegenerate && (await thumbnailExists(photoId))) {
+    // 参数签名没变且文件存在 → 直接复用；--force-thumbnails 也不会重复编码
+    const signature = `${THUMBNAIL_WIDTH}q${THUMBNAIL_QUALITY}e6.${THUMBNAIL_EXTENSION}`
+    const forceHard = forceRegenerate && hardForceEncode()
+    if (!forceHard && (await thumbnailExists(photoId)) && (await signatureMatches('thumbnail', photoId, signature))) {
       const existingResult = await processExistingThumbnail(photoId)
 
       if (existingResult) {
@@ -165,7 +173,11 @@ export async function generateThumbnailAndBlurhash(
     }
 
     // 生成新的缩略图
-    return await generateNewThumbnail(imageBuffer, photoId, persistToDisk, limitInputPixels)
+    const result = await generateNewThumbnail(imageBuffer, photoId, persistToDisk, limitInputPixels)
+    if (result.thumbnailBuffer) {
+      await writeSignature('thumbnail', photoId, signature)
+    }
+    return result
   } catch (error) {
     thumbnailLog.error(`处理失败：${photoId}`, error)
     return createFailureResult()

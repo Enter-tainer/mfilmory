@@ -8,6 +8,7 @@ import type { PhotoManifestItem } from '@afilmory/typing'
 import type { SatoriOptions } from 'satori'
 import sharp from 'sharp'
 
+import { signatureMatches, writeSignature } from '../../image/asset-signature.js'
 import type { Logger } from '../../logger/index.js'
 import { workdir } from '../../path.js'
 import { StorageManager } from '../../storage/index.js'
@@ -28,7 +29,9 @@ const ogAssetsDir = path.join(repoRoot, 'packages/builder/assets/og')
 const PLUGIN_NAME = 'afilmory:og-image'
 const RUN_STATE_KEY = 'state'
 const DEFAULT_DIRECTORY = '.afilmory/og-images'
-const DEFAULT_CONTENT_TYPE = 'image/png'
+const DEFAULT_CONTENT_TYPE = 'image/webp'
+/** PNG 与 WebP 视觉上无差异，差别全在体积（1200×628 卡片：421KB → ~33KB）。 */
+const WEBP_QUALITY = 90
 const DEFAULT_SITE_NAME = 'Photo Gallery'
 const DEFAULT_ACCENT_COLOR = '#007bff'
 
@@ -419,9 +422,14 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
           return
         }
 
-        const shouldRender = type !== 'skipped' || payload.options.isForceMode || payload.options.isForceManifest
+        const ogSignature = `webp-q${WEBP_QUALITY}`
+        const canReuse = !payload.options.isForceMode
+          && !payload.options.isForceManifest
+          && (await signatureMatches('og', item.id, ogSignature))
+        const shouldRender
+          = !canReuse && (type !== 'skipped' || payload.options.isForceMode || payload.options.isForceManifest)
 
-        const remoteKey = joinSegments(resolved.remotePrefix, `${item.id}.png`)
+        const remoteKey = joinSegments(resolved.remotePrefix, `${item.id}.webp`)
 
         if (!shouldRender) {
           try {
@@ -454,6 +462,8 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
             fonts,
           })
 
+          const webp = await sharp(Buffer.from(png)).webp({ quality: WEBP_QUALITY }).toBuffer()
+
           const stateForUpload = state
           if (
             !stateForUpload.uploaded.has(remoteKey) ||
@@ -461,7 +471,7 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
             payload.options.isForceManifest
           ) {
             try {
-              await storageManager.uploadFile(remoteKey, Buffer.from(png), {
+              await storageManager.uploadFile(remoteKey, webp, {
                 contentType: resolved.contentType,
               })
               stateForUpload.uploaded.add(remoteKey)
@@ -482,6 +492,7 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
             }
           }
 
+          await writeSignature('og', item.id, ogSignature)
           item.ogImageUrl = remoteUrl
         } catch (error) {
           logger.main.error(`OG image plugin: failed to render OG image for ${item.id}`, error)

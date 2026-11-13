@@ -1,6 +1,8 @@
 import type { Buffer } from 'node:buffer'
 
 export const THUMBNAIL_PLUGIN_DATA_KEY = 'afilmory:thumbnail-storage:data'
+/** 阅览器占位图（大图加载前的预览）单独走一份数据 */
+export const PREVIEW_PLUGIN_DATA_KEY = 'afilmory:preview-storage:data'
 
 /**
  * Unique symbol identifier for the thumbnail storage plugin.
@@ -15,6 +17,7 @@ export interface ThumbnailPluginData {
   localUrl: string | null
 }
 export const DEFAULT_DIRECTORY = '.afilmory/thumbnails'
+export const DEFAULT_PREVIEW_DIRECTORY = '.afilmory/previews'
 export const DEFAULT_CONTENT_TYPE = 'image/avif'
 
 const CONTENT_TYPES: Record<string, string> = {

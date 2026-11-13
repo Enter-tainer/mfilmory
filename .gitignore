@@ -17,6 +17,7 @@ apps/web/assets-git
 apps/web/src/data/photos-manifest.json
 apps/web/src/data/.cache/
 apps/web/public/thumbnails
+apps/web/public/previews
 apps/web/public/photos
 apps/web/public/originals
 
@@ -41,3 +42,7 @@ functions/_middleware.ts
 # deployment
 .vercel
 .wrangler
+
+# one-off measurement scripts / logs
+tmp-*.mts
+.tmp-*.log

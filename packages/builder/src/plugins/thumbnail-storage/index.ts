@@ -5,6 +5,8 @@ import type { ThumbnailPluginData } from './shared.js'
 import {
   contentTypeFromFilename,
   DEFAULT_DIRECTORY,
+  DEFAULT_PREVIEW_DIRECTORY,
+  PREVIEW_PLUGIN_DATA_KEY,
   THUMBNAIL_PLUGIN_DATA_KEY,
   THUMBNAIL_PLUGIN_SYMBOL,
 } from './shared.js'
@@ -16,6 +18,7 @@ type UploadableStorageConfig = Exclude<StorageConfig, { provider: 'eagle' }>
 
 interface ThumbnailStoragePluginOptions {
   directory?: string
+  previewDirectory?: string
   storageConfig?: UploadableStorageConfig
   contentType?: string
 }
@@ -23,6 +26,7 @@ interface ThumbnailStoragePluginOptions {
 interface ResolvedPluginConfig {
   directory: string
   remotePrefix: string
+  previewPrefix: string
   contentType: string
   useDefaultStorage: boolean
   storageConfig: UploadableStorageConfig | null
@@ -97,6 +101,9 @@ export default function thumbnailStoragePlugin(options: ThumbnailStoragePluginOp
         const fallbackStorage = config.user?.storage ?? builder.getStorageConfig()
         const storageConfig = (options.storageConfig ?? fallbackStorage) as StorageConfig
         const directory = normalizeDirectory(options.directory)
+        const previewDirectory = options.previewDirectory
+          ? normalizeDirectory(options.previewDirectory)
+          : DEFAULT_PREVIEW_DIRECTORY
         // 空字符串 = 上传时按文件名的扩展名推断 content-type
         const contentType = options.contentType ?? ''
 
@@ -106,6 +113,7 @@ export default function thumbnailStoragePlugin(options: ThumbnailStoragePluginOp
           resolved = {
             directory,
             remotePrefix: '',
+            previewPrefix: '',
             contentType,
             useDefaultStorage: !options.storageConfig,
             storageConfig: null,
@@ -116,10 +124,12 @@ export default function thumbnailStoragePlugin(options: ThumbnailStoragePluginOp
 
         const uploadableConfig = storageConfig as UploadableStorageConfig
         const remotePrefix = resolveRemotePrefix(uploadableConfig, directory)
+        const previewPrefix = resolveRemotePrefix(uploadableConfig, previewDirectory)
 
         resolved = {
           directory,
           remotePrefix,
+          previewPrefix,
           contentType,
           useDefaultStorage: !options.storageConfig,
           storageConfig: uploadableConfig,
@@ -128,6 +138,7 @@ export default function thumbnailStoragePlugin(options: ThumbnailStoragePluginOp
 
         if (!options.storageConfig) {
           builder.getStorageManager().addExcludePrefix(remotePrefix)
+          builder.getStorageManager().addExcludePrefix(previewPrefix)
         } else {
           externalStorageManager = new StorageManager(uploadableConfig)
         }
@@ -182,6 +193,40 @@ export default function thumbnailStoragePlugin(options: ThumbnailStoragePluginOp
         }
 
         payload.result.item.thumbnailUrl = remoteUrl
+
+        // 阅览器占位图（previews）：同一套上传逻辑，前缀单独一个目录
+        const previewData = payload.context.pluginData[PREVIEW_PLUGIN_DATA_KEY] as ThumbnailPluginData | undefined
+        if (!previewData || !previewData.buffer) {
+          return
+        }
+
+        const previewKey = joinSegments(resolved.previewPrefix, previewData.fileName)
+
+        if (!state.uploaded.has(previewKey)) {
+          try {
+            await storageManager.uploadFile(previewKey, previewData.buffer, {
+              contentType: resolved.contentType || contentTypeFromFilename(previewData.fileName),
+              cacheControl: 'public, max-age=31536000, immutable',
+            })
+            state.uploaded.add(previewKey)
+          } catch (error) {
+            logger.thumbnail.error(`上传占位图失败：${previewKey}`, error)
+            return
+          }
+        }
+
+        let previewUrl = state.urlCache.get(previewKey)
+        if (!previewUrl) {
+          try {
+            previewUrl = await storageManager.generatePublicUrl(previewKey)
+            state.urlCache.set(previewKey, previewUrl)
+          } catch (error) {
+            logger.thumbnail.error(`生成占位图 URL 失败：${previewKey}`, error)
+            return
+          }
+        }
+
+        payload.result.item.previewUrl = previewUrl
       },
     },
   }
