@@ -1,0 +1,262 @@
+{
+  "baseline": {
+    "config": "baseline600jq100",
+    "kb": 149.0,
+    "vmaf": 95.09,
+    "xpsnr": 41.43,
+    "ssim": 0.9773,
+    "s2": 85.63
+  },
+  "points": [
+    {
+      "config": "400q40",
+      "kb": 4.4,
+      "vmaf": 66.76,
+      "xpsnr": 31.45,
+      "ssim": 0.863,
+      "s2": 31.24,
+      "width": 400,
+      "quality": 40
+    },
+    {
+      "config": "400q50",
+      "kb": 6.6,
+      "vmaf": 69.22,
+      "xpsnr": 31.94,
+      "ssim": 0.882,
+      "s2": 38.35,
+      "width": 400,
+      "quality": 50
+    },
+    {
+      "config": "400q60",
+      "kb": 9.6,
+      "vmaf": 69.92,
+      "xpsnr": 32.28,
+      "ssim": 0.8943,
+      "s2": 41.91,
+      "width": 400,
+      "quality": 60
+    },
+    {
+      "config": "400q70",
+      "kb": 13.1,
+      "vmaf": 70.75,
+      "xpsnr": 32.44,
+      "ssim": 0.901,
+      "s2": 43.79,
+      "width": 400,
+      "quality": 70
+    },
+    {
+      "config": "400q80",
+      "kb": 17.3,
+      "vmaf": 70.85,
+      "xpsnr": 32.54,
+      "ssim": 0.9059,
+      "s2": 44.77,
+      "width": 400,
+      "quality": 80
+    },
+    {
+      "config": "448q40",
+      "kb": 5.2,
+      "vmaf": 67.03,
+      "xpsnr": 31.6,
+      "ssim": 0.8712,
+      "s2": 34.23,
+      "width": 448,
+      "quality": 40
+    },
+    {
+      "config": "448q50",
+      "kb": 7.8,
+      "vmaf": 68.95,
+      "xpsnr": 32.04,
+      "ssim": 0.8876,
+      "s2": 40.05,
+      "width": 448,
+      "quality": 50
+    },
+    {
+      "config": "448q60",
+      "kb": 11.4,
+      "vmaf": 69.58,
+      "xpsnr": 32.32,
+      "ssim": 0.8975,
+      "s2": 43.25,
+      "width": 448,
+      "quality": 60
+    },
+    {
+      "config": "448q70",
+      "kb": 15.7,
+      "vmaf": 69.87,
+      "xpsnr": 32.44,
+      "ssim": 0.9034,
+      "s2": 44.57,
+      "width": 448,
+      "quality": 70
+    },
+    {
+      "config": "448q80",
+      "kb": 20.9,
+      "vmaf": 70.4,
+      "xpsnr": 32.5,
+      "ssim": 0.9071,
+      "s2": 45.25,
+      "width": 448,
+      "quality": 80
+    },
+    {
+      "config": "500q40",
+      "kb": 6.2,
+      "vmaf": 88.1,
+      "xpsnr": 35.31,
+      "ssim": 0.918,
+      "s2": 59.07,
+      "width": 500,
+      "quality": 40
+    },
+    {
+      "config": "500q50",
+      "kb": 9.4,
+      "vmaf": 91.57,
+      "xpsnr": 37.32,
+      "ssim": 0.9426,
+      "s2": 69.98,
+      "width": 500,
+      "quality": 50
+    },
+    {
+      "config": "500q60",
+      "kb": 13.8,
+      "vmaf": 94.05,
+      "xpsnr": 39.27,
+      "ssim": 0.9595,
+      "s2": 78.14,
+      "width": 500,
+      "quality": 60
+    },
+    {
+      "config": "500q70",
+      "kb": 18.9,
+      "vmaf": 95.38,
+      "xpsnr": 41.03,
+      "ssim": 0.9706,
+      "s2": 83.49,
+      "width": 500,
+      "quality": 70
+    },
+    {
+      "config": "500q80",
+      "kb": 25.1,
+      "vmaf": 96.16,
+      "xpsnr": 42.57,
+      "ssim": 0.9778,
+      "s2": 86.99,
+      "width": 500,
+      "quality": 80
+    },
+    {
+      "config": "512q40",
+      "kb": 6.4,
+      "vmaf": 88.15,
+      "xpsnr": 35.33,
+      "ssim": 0.919,
+      "s2": 58.64,
+      "width": 512,
+      "quality": 40
+    },
+    {
+      "config": "512q50",
+      "kb": 9.7,
+      "vmaf": 91.66,
+      "xpsnr": 37.27,
+      "ssim": 0.9422,
+      "s2": 69.26,
+      "width": 512,
+      "quality": 50
+    },
+    {
+      "config": "512q60",
+      "kb": 14.2,
+      "vmaf": 93.67,
+      "xpsnr": 39.11,
+      "ssim": 0.9582,
+      "s2": 76.61,
+      "width": 512,
+      "quality": 60
+    },
+    {
+      "config": "512q70",
+      "kb": 19.5,
+      "vmaf": 94.81,
+      "xpsnr": 40.58,
+      "ssim": 0.9678,
+      "s2": 81.05,
+      "width": 512,
+      "quality": 70
+    },
+    {
+      "config": "512q80",
+      "kb": 26.0,
+      "vmaf": 95.4,
+      "xpsnr": 41.79,
+      "ssim": 0.9743,
+      "s2": 83.69,
+      "width": 512,
+      "quality": 80
+    },
+    {
+      "config": "600q40",
+      "kb": 8.1,
+      "vmaf": 88.93,
+      "xpsnr": 36.26,
+      "ssim": 0.9313,
+      "s2": 63.82,
+      "width": 600,
+      "quality": 40
+    },
+    {
+      "config": "600q50",
+      "kb": 12.4,
+      "vmaf": 91.59,
+      "xpsnr": 38.17,
+      "ssim": 0.9512,
+      "s2": 72.89,
+      "width": 600,
+      "quality": 50
+    },
+    {
+      "config": "600q60",
+      "kb": 18.3,
+      "vmaf": 93.31,
+      "xpsnr": 39.88,
+      "ssim": 0.9641,
+      "s2": 78.84,
+      "width": 600,
+      "quality": 60
+    },
+    {
+      "config": "600q70",
+      "kb": 25.3,
+      "vmaf": 94.04,
+      "xpsnr": 41.25,
+      "ssim": 0.9722,
+      "s2": 82.22,
+      "width": 600,
+      "quality": 70
+    },
+    {
+      "config": "600q80",
+      "kb": 34.0,
+      "vmaf": 94.45,
+      "xpsnr": 42.32,
+      "ssim": 0.9773,
+      "s2": 84.25,
+      "width": 600,
+      "quality": 80
+    }
+  ]
+}

@@ -107,8 +107,9 @@ pnpm build            # 把 manifest 内联进 SPA，产物在 apps/web/dist
 
 | 产物 | 格式 | 参数 | 说明 |
 | --- | --- | --- | --- |
-| 缩略图（`600px` 宽） | **AVIF** | `quality: 80` | 体积约为原来 JPEG q100 的 40%，实测 PSNR 与 q100 持平甚至更好；浏览器原生解码（Chrome 85+ / Safari 16.4+ / Firefox 93+），前端不需要任何转换 |
-| OG 卡（分享图） | PNG | — | 设计待重做（Plane TECH-84），设计定了再改格式。**OG 永远不要用 AVIF**：跨平台实测只有 Facebook 支持 |
+| 缩略图（网格，`600px` 宽） | **AVIF** | `quality: 70` | 网格里一格只显示 300–400px，q70 足够；全库约 16MB |
+| 占位图（阅览器，`1600px` 宽） | **AVIF** | `quality: 50` | 点开大图时先显示它，原图下完无缝替换。4K 全屏下明显比旧的 600px 占位清楚，单张体积与旧占位（600px JPEG q100）持平 |
+| OG 卡（分享图） | **WebP** | `quality: 90` | 1200×628；PNG 421KB → WebP ~33KB。**OG 永远不要用 AVIF**：跨平台实测只有 Facebook 支持 |
 
 - 缩略图文件名/扩展名统一由 `packages/builder/src/image/thumbnail.ts` 的 `getThumbnailFilename()` 提供，不要再硬编码 `.jpg`（上游 #259 就是这么坏的）。
 - 换格式要全量重生成：`pnpm build:manifest -- --force-thumbnails`。残留的旧格式文件由 `handleDeletedPhotos` 清理——只在新格式文件已存在时才删，避免 `--force-manifest`（不重生成缩略图）把唯一副本删掉。
