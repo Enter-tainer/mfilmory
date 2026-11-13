@@ -1,3 +1,5 @@
+// 匹配 HTML 里「初始」的 og:image（站点级 og-image-*.png，由 web 的 og-image 插件生成），
+// 命中后重写成该照片在 R2 上的 WebP 卡片。注意匹配的是输入（.png），输出是 .webp。
 const OG_IMAGE_PATTERN = /^https?:\/\/{{ patternHost }}\/+og-image.*\.png$/i
 
 const normalizeSlug = (slug: string) => {
@@ -10,7 +12,7 @@ const normalizeSlug = (slug: string) => {
 
 const buildOgImageUrl = (slug: string) => {
     const encodedOnce = normalizeSlug(slug)
-    return `{{ ogBase }}/${encodedOnce}.png`
+    return `{{ ogBase }}/${encodedOnce}.webp`
 }
 
 const isHtmlResponse = (response: Response) => {
