@@ -46,3 +46,5 @@ functions/_middleware.ts
 # one-off measurement scripts / logs
 tmp-*.mts
 .tmp-*.log
+.perf/
+.tmp-*.html

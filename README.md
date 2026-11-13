@@ -113,7 +113,7 @@ pnpm build            # 把 manifest 内联进 SPA，产物在 apps/web/dist
 
 - 缩略图文件名/扩展名统一由 `packages/builder/src/image/thumbnail.ts` 的 `getThumbnailFilename()` 提供，不要再硬编码 `.jpg`（上游 #259 就是这么坏的）。
 - 换格式要全量重生成：`pnpm build:manifest -- --force-thumbnails`。残留的旧格式文件由 `handleDeletedPhotos` 清理——只在新格式文件已存在时才删，避免 `--force-manifest`（不重生成缩略图）把唯一副本删掉。
-- 远端存储里的旧格式对象**不会**自动删（`thumbnail-storage` 把自己的前缀排除在扫描外）：用 `pnpm cleanup:thumbnails` 统计、`pnpm cleanup:thumbnails -- --delete` 清理。
+- 远端存储里的旧格式对象**不会**自动删（`thumbnail-storage` 把自己的前缀排除在扫描外）：用 `pnpm cleanup:assets` 统计、`pnpm cleanup:assets -- --delete` 清理。
 - OG 渲染链（satori → resvg）只可靠接受 PNG/JPEG 输入：WebP 会被静默丢弃，AVIF 直接抛 `t is not iterable`。所以 `og-image-storage` 会先用 sharp 把缩略图解码重编码成 PNG 再交给 satori，换缩略图格式时不要绕过这一步。
 
 ### 开发
@@ -195,3 +195,4 @@ git fetch upstream
 ```
 
 上游的 `apps/web` 改动通常可以 cherry-pick；涉及 `be/`、`apps/ssr`、`apps/mobile` 的提交需要手工裁剪。
+

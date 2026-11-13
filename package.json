@@ -22,7 +22,7 @@
     "deploy:cloudflare": "node scripts/deploy.mjs",
     "deploy:preview": "node scripts/deploy.mjs --preview",
     "migrate:manifest": "tsx scripts/migrate-manifest.ts",
-    "cleanup:thumbnails": "tsx scripts/cleanup-stale-thumbnails.ts",
+    "cleanup:assets": "tsx scripts/cleanup-stale-assets.ts",
     "type-check": "pnpm run -r type-check",
     "lint": "eslint --fix",
     "format": "prettier --write \"apps/**/*.{ts,tsx,js,jsx,json,css,md}\" \"packages/**/*.{ts,tsx,js,jsx,json,css,md}\""
@@ -56,3 +56,4 @@
     "vite-tsconfig-paths": "6.1.1"
   }
 }
+
