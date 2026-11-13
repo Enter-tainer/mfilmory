@@ -2,10 +2,14 @@
 /* 没用到 @tailwindcss/typography 的 `.prose`（全仓 0 处引用），但插件会无条件输出
    14.5 KB 的规则；直接不引入。 */
 @plugin '@egoist/tailwindcss-icons';
-/* daisyui 的 calendar 组件内置 vanilla-calendar-pro 样式（`.vc-*`），单文件 58–78 KB，
-   占首屏 CSS 的 18%，而站点用的是自己写的 DateRangePicker —— 排除掉。 */
+/* 这个站从不用 daisyui 的组件类：UI 全部来自 packages/ui（radix + tailwind-variants），
+   只有 daisyui 的 theme 变量（--color-primary / --color-base-100 …）在被引用。
+   所以只保留它的 base 层（根色、scrollbar、properties 等），组件层整层不输出，
+   实测首屏 CSS 少 ~100 KB。 */
 @plugin 'daisyui' {
-  exclude: calendar;
+  include:
+    rootcolor, svg, rootscrollgutter, properties, scrollbar, rootscrolllock, join, glass, radius,
+    typography;
 }
 @plugin 'tailwind-scrollbar';
 @plugin 'tailwindcss-animate';
@@ -251,3 +255,4 @@ html body {
     transform: translateX(4px);
   }
 }
+
