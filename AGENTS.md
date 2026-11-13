@@ -71,5 +71,7 @@ apps/web (Vite + React 19 SPA) ←────────┘
 
 ## 已知遗留 / 下一步
 
+- **`--dry-run` 的计数不可信（会偏高）**：`packages/builder/src/builder/builder.ts:87` 在 `dryRun` 时跳过 `ensurePluginsReady()`，于是 thumbnail / og-image 插件注册的 `.afilmory/thumbnails/`、`.afilmory/og-images/` 排除前缀不生效，桶里已生成的缩略图和 OG 图会被当成"照片"（实测对 369 张的库会虚报成 1110 张、要求处理 741 张）。真实构建（不加 `--dry-run`）会排除这些生成物，实测扫描结果 382 个文件 → 369 张照片 → 0 张需要处理。估算增量时别信 dry-run 的数字。
+
 - `packages/builder/src/plugins/og-image-storage/index.ts` 的 Satori 字体已从删掉的 `be/apps/core/src/modules/content/og/assets` 挪到 `packages/builder/assets/og`（`Geist-Medium.ttf` + `HarmonyOS_Sans_SC_Medium.ttf`），改这块时别再指回去。
 - 本 fork 已同步到 `upstream/main` `cdeada39`（2026-11）。上游 `c392e065..cdeada39` 的 40 个提交全是 `apps/mobile`（+ 移动端 CI/设计文档），`apps/web`、`packages`、`locales`、`scripts` 一个文件都没动；之后上游再有 `apps/web` 改动可直接 `git cherry-pick`。
