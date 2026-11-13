@@ -20,6 +20,40 @@
 | `DESIGN.md` | `apps/web` + `packages/ui` 的设计系统规范 |
 | `scripts/` | `preinstall` / demo 数据 / OG 图与 favicon 生成等构建期脚本（均为跨平台 Node 实现） |
 
+## 插件与构建期钩子
+
+仓库里的"插件"全在仓库内，分三层：
+
+**1. SPA 的本地 Vite 插件** — `apps/web/plugins/vite/`（由 `apps/web/vite.config.ts` 装配）
+
+| 文件 | 作用 |
+| --- | --- |
+| `manifest-inject.ts` | 把 `photos-manifest.json` 内联成 `<script id="manifest">window.__MANIFEST__ = …` |
+| `site-config-inject.ts` | 注入 `window.__SITE_CONFIG__`（`site.config.ts` + `config.json`） |
+| `photos-static.ts` | 静态站的照片数据 / 路由辅助 |
+| `og-image-plugin.ts` | 构建期生成站点 OG 图 + 全部 favicon（`logo.jpg` + `sharp`） |
+| `feed-sitemap.ts` | 生成 `feed.xml` / `sitemap.xml` |
+| `locales-json.ts` | 把 `locales/app/*.json` 的扁平点号 key 展开成嵌套对象（Windows 路径比较已修） |
+| `i18n-hmr.ts` / `locales.ts` | 文案热更新辅助（`locales.ts` 是死代码，上游如此） |
+| `deps.ts` | 手动分包（react / i18next / heic-to） |
+| `ast.ts` | `tw` 模板字符串压缩宏（unplugin-ast） |
+| `vibeloft-telemetry.ts` | 可选统计注入（`config.json` 的 `telemetry.vibeloft`） |
+
+**2. `packages/builder` 的照片流水线插件** — `packages/builder/src/plugins/`
+
+- `storage/`：local / s3 / b2 / github / eagle 五种存储 provider
+- `thumbnail-storage/`：缩略图上传
+- `geocoding.js`：照片地点反查（`geocodingPlugin`）
+- `github-repo-sync.js`：把 manifest / 缩略图写回 GitHub 仓库
+- `og-image-storage/`：**OG 图插件**。其中 `vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk` 就是 **Cloudflare Pages 中间件**：拦截 `/photos/:slug` 的 HTML，把 `og:image` / `twitter:image` 重写到 R2 上的 `.afilmory/og-images/*.png`
+  - 产物写到仓库根 `functions/_middleware.ts`，由 `builder.config.ts` 里的 `ogImagePlugin({ vendor: { type: 'cloudflare-middleware', storageURL } })` 触发
+  - 该文件已提交一份（`.gitignore` 里做了例外）；内容由 `config.json` 的 `url` + `builder.config.ts` 的 `storageURL` 决定，真实 `pnpm build` 会重新生成
+  - 部署到 Cloudflare Pages 时 **project root 必须是仓库根**（或显式 `--functions-directory`），否则 `functions/` 不会被带上，OG 改写就失效
+
+**3. 根级本地 ESLint 插件** — `plugins/eslint/`（i18n JSON 校验、no-debug、package.json 校验、递归排序），由 `eslint.config.mjs` 加载。
+
+> 已删除：根 `plugins/vite/ast.ts` —— 只有已删的 `apps/docs` 和 `be/apps/dashboard` 引用它，`apps/web` 自带一份同功能实现。
+
 ## 去掉了什么
 
 - `be/` —— SaaS 后端（Hono API、dashboard、Drizzle DB、Redis、task-queue、OAuth gateway）

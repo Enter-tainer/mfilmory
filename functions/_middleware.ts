@@ -1,0 +1,52 @@
+const OG_IMAGE_PATTERN = /^https?:\/\/gallery\.mgt\.moe\/+og-image.*\.png$/i
+
+const normalizeSlug = (slug: string) => {
+    try {
+        return encodeURIComponent(decodeURIComponent(slug))
+    } catch {
+        return encodeURIComponent(slug)
+    }
+}
+
+const buildOgImageUrl = (slug: string) => {
+    const encodedOnce = normalizeSlug(slug)
+    return `https://r2-gallery.996404.xyz/mgt-gallery/.afilmory/og-images/${encodedOnce}.png`
+}
+
+const isHtmlResponse = (response: Response) => {
+    const contentType = response.headers.get('content-type') || ''
+    return contentType.includes('text/html')
+}
+
+const stripPhotosPrefix = (pathname: string) => pathname.replace(/^\/?photos\//, '').replace(/\/$/, '')
+
+const shouldRewriteMeta = (content: string | null | undefined) => {
+    if (!content) return false
+    return OG_IMAGE_PATTERN.test(content.trim())
+}
+
+export async function onRequest(context: { request: Request; next: () => Promise<Response> }) {
+    const url = new URL(context.request.url)
+    if (!url.pathname.startsWith('/photos/')) return context.next()
+
+    const slug = stripPhotosPrefix(url.pathname)
+    if (!slug) return context.next()
+
+    const response = await context.next()
+    if (!isHtmlResponse(response)) return response
+
+    const ogImageUrl = buildOgImageUrl(slug)
+
+    const handler = {
+        element(element: Element) {
+            const content = element.getAttribute('content')
+            if (!shouldRewriteMeta(content)) return
+            element.setAttribute('content', ogImageUrl)
+        },
+    }
+
+    return new HTMLRewriter()
+        .on('meta[property="og:image"]', handler)
+        .on('meta[property="twitter:image"]', handler)
+        .transform(response)
+}

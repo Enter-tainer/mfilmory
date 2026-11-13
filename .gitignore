@@ -27,8 +27,12 @@ apps/web/src/generated-routes.ts
 cluster-report.html
 cluster-report.json
 
-# og-image-storage plugin generated files
-functions/
+# og-image-storage plugin output. `_middleware.ts` is produced by the
+# cloudflare-middleware OG vendor during a real `pnpm build`; it is committed
+# because CI (and any build that skips the photo pipeline) would otherwise
+# deploy a Cloudflare Pages project without the OG rewrite middleware.
+functions/*
+!functions/_middleware.ts
 
 # agent scratch
 .claude

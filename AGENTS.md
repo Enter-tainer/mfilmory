@@ -42,6 +42,13 @@ apps/web (Vite + React 19 SPA) ←────────┘
 - 照片流水线只允许 `packages/builder` 碰存储；共享类型在 `packages/typing`；照片查询一律走 `packages/data` 的 `PhotoLoader`。
 - `pnpm dev` 的 `precheck` 会真的去跑 `build:manifest`（因此需要 `.env` / `builder.config.ts` 可用）；只想跑 Vite 时用 `pnpm --filter @afilmory/web exec vite`。
 
+## 插件（全部在仓库内，没有外部插件目录）
+
+- `apps/web/plugins/vite/*` — SPA 的 Vite 插件：`manifest-inject`（内联 `__MANIFEST__`）、`site-config-inject`、`photos-static`、`og-image-plugin`（构建期 OG + favicon）、`feed-sitemap`、`locales-json`（点号 key 展开）、`i18n-hmr`、`deps`（分包）、`ast`（`tw` 宏）、`vibeloft-telemetry`。
+- `packages/builder/src/plugins/*` — 流水线插件：`storage/{local,s3,b2,github,eagle}`、`thumbnail-storage`、`geocoding`、`github-repo-sync`、`og-image-storage`。
+- **Cloudflare OG 插件** = `og-image-storage/vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk`。它把 `/photos/:slug` 的 `og:image`/`twitter:image` 改写到 R2 的 `.afilmory/og-images/*.png`，产物是仓库根 `functions/_middleware.ts`（已提交；正常 `pnpm build` 时由 builder 重新生成）。改模板后要重跑一次构建；部署 Cloudflare Pages 时 project root 必须是仓库根，否则 `functions/` 不生效。
+- `plugins/eslint/*` — 本地 ESLint 插件（i18n JSON、no-debug、package.json、递归排序）。
+
 ## 本 fork 相对上游的改动（改代码时注意别改回去）
 
 - 删除 `be/`、`apps/ssr`、`apps/mobile`、`apps/site(s)`、`apps/docs`、`apps/promo` 及其 CI/Docker 文件。
