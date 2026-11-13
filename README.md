@@ -95,6 +95,15 @@ pnpm build:manifest   # 扫描存储 → 缩略图/blurhash/EXIF → apps/web/sr
 pnpm build            # 把 manifest 内联进 SPA，产物在 apps/web/dist
 ```
 
+### 本地缓存（不进仓库）
+
+| 路径 | 作用 |
+| --- | --- |
+| `apps/web/src/data/photos-manifest.json` | 照片清单，由 `build:manifest` 产出、构建时内联进 `index.html` |
+| `apps/web/public/thumbnails/` | 缩略图本地缓存：builder 靠它判断「这照片处理过、可跳过」 |
+
+两者都在 `.gitignore` 里（体积大 / 因站点而异），所以**全新克隆后第一次 `pnpm build` 会把存储里的照片全部处理一遍**（并重新上传缩略图 / OG 图到存储）。日常增量构建只需要保留这两个缓存即可。
+
 ### 开发
 
 ```bash
