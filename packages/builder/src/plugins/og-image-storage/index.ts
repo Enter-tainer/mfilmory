@@ -11,7 +11,7 @@ import { workdir } from '../../path.js'
 import { StorageManager } from '../../storage/index.js'
 import type { S3CompatibleConfig, StorageConfig } from '../../storage/interfaces.js'
 import type { ThumbnailPluginData } from '../thumbnail-storage/shared.js'
-import { PREVIEW_PLUGIN_DATA_KEY, THUMBNAIL_PLUGIN_DATA_KEY } from '../thumbnail-storage/shared.js'
+import { MEDIA_CACHE_CONTROL, PREVIEW_PLUGIN_DATA_KEY, THUMBNAIL_PLUGIN_DATA_KEY } from '../thumbnail-storage/shared.js'
 import type { BuilderPlugin } from '../types.js'
 import { PHOTO_OG_WEBP_QUALITY, renderPhotoOgImage } from './photo-og.js'
 import type { CloudflareMiddlewareVendorConfig } from './vendors/cloudflare-moddleware.js'
@@ -298,6 +298,7 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
           ) {
             try {
               await storageManager.uploadFile(remoteKey, webp, {
+                cacheControl: MEDIA_CACHE_CONTROL,
                 contentType: resolved.contentType,
               })
               stateForUpload.uploaded.add(remoteKey)
@@ -345,3 +346,4 @@ export type { OgImagePluginOptions, OgVendorConfig }
 
 export { type CloudflareMiddlewareVendorConfig } from './vendors/cloudflare-moddleware.js'
 export { type OgVendorKind } from './vendors/types.js'
+

@@ -20,6 +20,18 @@ export const DEFAULT_DIRECTORY = '.afilmory/thumbnails'
 export const DEFAULT_PREVIEW_DIRECTORY = '.afilmory/previews'
 export const DEFAULT_CONTENT_TYPE = 'image/avif'
 
+/**
+ * 缩略图 / 占位图上传时写进对象元数据的 Cache-Control。
+ *
+ * 这些产物的文件名是固定的（`<photoId>.avif`），照片重新处理时会被原地覆盖，所以不能给
+ * `immutable`；但完全不给 Cache-Control 时浏览器只会用启发式缓存（≈10% 的文件年龄），
+ * 刚上传的照片几乎每次访问都要重新下载一遍（这批图恰好是打开率最高的首屏图）。
+ *
+ * 折中：浏览器缓存 1 天，之后用 stale-while-revalidate 在后台刷新的同时先回旧图。
+ * 换照片后最多 1 天看到旧缩略图，代价可以接受。
+ */
+export const MEDIA_CACHE_CONTROL = 'public, max-age=86400, stale-while-revalidate=604800'
+
 const CONTENT_TYPES: Record<string, string> = {
   avif: 'image/avif',
   webp: 'image/webp',

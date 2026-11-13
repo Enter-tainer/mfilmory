@@ -400,10 +400,15 @@ export class S3StorageProvider implements StorageProvider {
   }
 
   async uploadFile(key: string, data: Buffer, options?: StorageUploadOptions): Promise<StorageObject> {
-    const response = await this.client.putObject(key, data as unknown as BodyInit, {
+    const headers: Record<string, string> = {
       'content-type': options?.contentType ?? 'application/octet-stream',
       'content-length': data.byteLength.toString(),
-    })
+    }
+    if (options?.cacheControl) {
+      headers['cache-control'] = options.cacheControl
+    }
+
+    const response = await this.client.putObject(key, data as unknown as BodyInit, headers)
 
     if (!response.ok) {
       const text = await response.text().catch(() => '')
@@ -448,3 +453,4 @@ export class S3StorageProvider implements StorageProvider {
     return prefix.replaceAll('\\', '/').replaceAll(/^\/+|\/+$/g, '')
   }
 }
+

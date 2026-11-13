@@ -34,6 +34,13 @@ export type StorageUploadProgressHandler = (progress: StorageUploadProgress) => 
 
 export interface StorageUploadOptions {
   contentType?: string
+  /**
+   * 写进对象元数据的 Cache-Control。
+   *
+   * 缩略图/分享图这些「文件名固定、会被覆盖」的产物必须显式带上，否则浏览器只能靠
+   * 启发式缓存（≈10% 的文件年龄），新上传的图几乎每次访问都要重新下载。
+   */
+  cacheControl?: string
   onProgress?: StorageUploadProgressHandler
 }
 
@@ -286,3 +293,4 @@ export type ManagedStorageConfig = {
 export type StorageConfig = RemoteStorageConfig | LocalStorageConfig | ManagedStorageConfig | CustomStorageConfig
 
 export type StorageProviderCategory = 'remote' | 'local'
+
