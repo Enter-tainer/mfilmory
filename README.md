@@ -106,11 +106,39 @@ pnpm lint            # eslint --fix
 
 `apps/web/dist` 是**纯静态**目录（`index.html` + assets + manifest），可直接：
 
-- Cloudflare Pages：`pnpm deploy:cloudflare`（`wrangler pages deploy`，配置见 `apps/web/wrangler.jsonc`）
+- Cloudflare Pages：见下面的专用小节（项目 `mgt-afilmory`，`gallery.mgt.moe`）
 - Vercel：`apps/web/vercel.json`
 - 任意静态服务器 / 对象存储 + CDN
 
 照片本体与缩略图由 `builder.config.ts` 指向的存储/CDN 提供，构建产物里只有 manifest 与前端资源。
+
+#### Cloudflare Pages
+
+现网项目是 **`mgt-afilmory`**（`mgt-afilmory.pages.dev` + `gallery.mgt.moe`），历史部署全部是 **CLI 部署**、生产分支 `main`。
+
+关键点：仓库根的 `functions/_middleware.ts`（CF OG 中间件）只有当 `wrangler` 的工作目录是**仓库根**时才会被打包进去。所以命令要在仓库根跑，目录用参数传：
+
+```powershell
+# 1) 构建（真实照片：先跑照片流水线，再构建 SPA；只想复用现有 manifest 就直接 pnpm --filter @afilmory/web build）
+pnpm build
+
+# 2) 部署到生产（branch main → Production 环境）
+pnpx wrangler pages deploy apps/web/dist --project-name mgt-afilmory --branch main
+
+# 或者先发一个预览部署验证（不碰 production，会返回 xxx.mgt-afilmory.pages.dev 链接）
+pnpm deploy:preview
+```
+
+- 本地没登录过就先 `pnpx wrangler login`
+- 工作区有未提交改动时 wrangler 会提示，加 `--commit-dirty=true` 照常部署
+- 部署后验证 OG 中间件是否生效：
+
+  ```powershell
+  curl.exe -s https://gallery.mgt.moe/photos/<photoId> | Select-String 'og:image'
+  # 期望：https://r2-gallery.996404.xyz/mgt-gallery/.afilmory/og-images/<photoId>.png
+  ```
+
+- `apps/web/wrangler.jsonc`（`name: afilmory-web`）只在 `apps/web` 目录里部署时生效，那条路径带不上根 `functions/`，所以**不要**在 `apps/web` 里直接 `wrangler pages deploy`
 
 ## Windows 说明
 
