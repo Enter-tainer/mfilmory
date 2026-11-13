@@ -206,7 +206,6 @@ export default function thumbnailStoragePlugin(options: ThumbnailStoragePluginOp
           try {
             await storageManager.uploadFile(previewKey, previewData.buffer, {
               contentType: resolved.contentType || contentTypeFromFilename(previewData.fileName),
-              cacheControl: 'public, max-age=31536000, immutable',
             })
             state.uploaded.add(previewKey)
           } catch (error) {
