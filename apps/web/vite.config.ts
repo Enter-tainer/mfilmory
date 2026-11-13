@@ -23,6 +23,7 @@ import { astPlugin } from './plugins/vite/ast'
 import { createDependencyChunksPlugin } from './plugins/vite/deps'
 import { createFeedSitemapPlugin } from './plugins/vite/feed-sitemap'
 import { localesJsonPlugin } from './plugins/vite/locales-json'
+import { inlineMainCssPlugin } from './plugins/vite/inline-main-css'
 import { manifestInjectPlugin } from './plugins/vite/manifest-inject'
 import { ogImagePlugin } from './plugins/vite/og-image-plugin'
 import { photosStaticPlugin } from './plugins/vite/photos-static'
@@ -66,6 +67,7 @@ const routeGenPlugins: PluginOption[] = [
 ]
 const staticWebBuildPlugins: PluginOption[] = [
   manifestInjectPlugin(),
+  inlineMainCssPlugin(),
   siteConfigInjectPlugin(),
   photosStaticPlugin(),
   // PWA service worker has been retired: it provided no offline capability (navigateFallback was
@@ -212,3 +214,4 @@ function getGitHash() {
     return ''
   }
 }
+
