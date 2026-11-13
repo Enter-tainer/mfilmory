@@ -48,7 +48,7 @@
 - `github-repo-sync.js`：把 manifest / 缩略图写回 GitHub 仓库
 - `og-image-storage/`：**OG 图插件**。其中 `vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk` 就是 **Cloudflare Pages 中间件**：拦截 `/photos/:slug` 的 HTML，把 `og:image` / `twitter:image` 重写到 R2 上的 `.afilmory/og-images/*.png`
   - 产物写到仓库根 `functions/_middleware.ts`，由 `builder.config.ts` 里的 `ogImagePlugin({ vendor: { type: 'cloudflare-middleware', storageURL } })` 触发
-  - 该文件已提交一份（`.gitignore` 里做了例外）；内容由 `config.json` 的 `url` + `builder.config.ts` 的 `storageURL` 决定，真实 `pnpm build` 会重新生成
+  - 该文件已提交一份（`.gitignore` 里做了例外）；内容由 `config.json` 的 `url` + `builder.config.ts` 的 `storageURL` 决定。真实 `pnpm build` 会重新生成，也可以 `pnpm og:middleware` 单独重生成（`-- --check` 校验是否过期，`--storage-url=…` 临时覆盖 CDN 地址）
   - 部署到 Cloudflare Pages 时 **project root 必须是仓库根**（或显式 `--functions-directory`），否则 `functions/` 不会被带上，OG 改写就失效
 
 **3. 根级本地 ESLint 插件** — `plugins/eslint/`（i18n JSON 校验、no-debug、package.json 校验、递归排序），由 `eslint.config.mjs` 加载。
@@ -117,26 +117,38 @@ pnpm lint            # eslint --fix
 
 现网项目是 **`mgt-afilmory`**（`mgt-afilmory.pages.dev` + `gallery.mgt.moe`），历史部署全部是 **CLI 部署**、生产分支 `main`。
 
-关键点：仓库根的 `functions/_middleware.ts`（CF OG 中间件）只有当 `wrangler` 的工作目录是**仓库根**时才会被打包进去。所以命令要在仓库根跑，目录用参数传：
+关键点：仓库根的 `functions/_middleware.ts`（CF OG 中间件）只有当 `wrangler` 的工作目录是**仓库根**时才会被打包进去。仓库里已经封好了 `scripts/deploy.mjs`，它会在部署前校验 dist 和中间件，所以直接用脚本：
 
 ```powershell
-# 1) 构建（真实照片：先跑照片流水线，再构建 SPA；只想复用现有 manifest 就直接 pnpm --filter @afilmory/web build）
-pnpm build
+pnpm deploy:cloudflare        # 构建 + 部署到生产（branch main）
+pnpm deploy:preview           # 构建 + 发预览部署（branch mfilmory-preview，不碰 production）
+node scripts/deploy.mjs --skip-build       # 复用现有 dist（不重新构建）
+node scripts/deploy.mjs --dry-run          # 只打印将要执行的 wrangler 命令
+node scripts/deploy.mjs --project=xxx --branch=yyy --dirty
+```
 
-# 2) 部署到生产（branch main → Production 环境）
+脚本做的事：`pnpm build`（可 `--skip-build` 跳过）→ 校验 `apps/web/dist/index.html` 和 `functions/_middleware.ts` → 工作区脏时自动加 `--commit-dirty=true` → 在**仓库根**执行 `pnpx wrangler pages deploy apps/web/dist --project-name mgt-afilmory --branch main`。项目名/分支可用 `CF_PAGES_PROJECT` / `CF_PRODUCTION_BRANCH` / `CF_PREVIEW_BRANCH` 覆盖。
+
+等价的裸命令（想手工跑时）：
+
+```powershell
 pnpx wrangler pages deploy apps/web/dist --project-name mgt-afilmory --branch main
-
-# 或者先发一个预览部署验证（不碰 production，会返回 xxx.mgt-afilmory.pages.dev 链接）
-pnpm deploy:preview
 ```
 
 - 本地没登录过就先 `pnpx wrangler login`
-- 工作区有未提交改动时 wrangler 会提示，加 `--commit-dirty=true` 照常部署
 - 部署后验证 OG 中间件是否生效：
 
   ```powershell
   curl.exe -s https://gallery.mgt.moe/photos/<photoId> | Select-String 'og:image'
   # 期望：https://r2-gallery.996404.xyz/mgt-gallery/.afilmory/og-images/<photoId>.png
+  ```
+
+- 想单独重新生成中间件（改模板/换 CDN 后不必跑整套照片流水线）：
+
+  ```powershell
+  pnpm og:middleware                 # 用 .env 里的 S3_CUSTOM_DOMAIN 作 storageURL
+  pnpm og:middleware -- --storage-url=https://cdn.example.com/gallery
+  pnpm og:middleware -- --check       # 校验已提交的 functions/_middleware.ts 是否过期（CI 可用）
   ```
 
 - `apps/web/wrangler.jsonc`（`name: afilmory-web`）只在 `apps/web` 目录里部署时生效，那条路径带不上根 `functions/`，所以**不要**在 `apps/web` 里直接 `wrangler pages deploy`

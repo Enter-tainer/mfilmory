@@ -46,8 +46,8 @@ apps/web (Vite + React 19 SPA) ←────────┘
 
 - `apps/web/plugins/vite/*` — SPA 的 Vite 插件：`manifest-inject`（内联 `__MANIFEST__`）、`site-config-inject`、`photos-static`、`og-image-plugin`（构建期 OG + favicon）、`feed-sitemap`、`locales-json`（点号 key 展开）、`i18n-hmr`、`deps`（分包）、`ast`（`tw` 宏）、`vibeloft-telemetry`。
 - `packages/builder/src/plugins/*` — 流水线插件：`storage/{local,s3,b2,github,eagle}`、`thumbnail-storage`、`geocoding`、`github-repo-sync`、`og-image-storage`。
-- **Cloudflare OG 插件** = `og-image-storage/vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk`。它把 `/photos/:slug` 的 `og:image`/`twitter:image` 改写到 R2 的 `.afilmory/og-images/*.png`，产物是仓库根 `functions/_middleware.ts`（已提交；正常 `pnpm build` 时由 builder 重新生成）。改模板后要重跑一次构建。
-- **部署 = Cloudflare Pages 项目 `mgt-afilmory`（生产分支 `main`），必须从仓库根执行** `pnpx wrangler pages deploy apps/web/dist --project-name mgt-afilmory`，否则根 `functions/` 不会被打包，OG 改写失效。`apps/web/wrangler.jsonc` 只在 `apps/web` 里部署时生效，别用。预览部署：`pnpm deploy:preview`。
+- **Cloudflare OG 插件** = `og-image-storage/vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk`。它把 `/photos/:slug` 的 `og:image`/`twitter:image` 改写到 R2 的 `.afilmory/og-images/*.png`，产物是仓库根 `functions/_middleware.ts`（**已提交**；正常 `pnpm build` 时由 builder 重新生成，改模板后可用 `pnpm og:middleware` 单独重生成，`-- --check` 校验是否过期）。
+- **部署 = Cloudflare Pages 项目 `mgt-afilmory`（生产分支 `main`）**，用仓库里的脚本，别手搓：`pnpm deploy:cloudflare`（构建 + 部署）/ `pnpm deploy:preview`（预览）/ `node scripts/deploy.mjs --skip-build --dry-run`（调试）。脚本必须在**仓库根**执行并以参数传 dist 目录，否则根 `functions/` 不会被打包，OG 改写失效；`apps/web/wrangler.jsonc` 只在 `apps/web` 里部署时生效，别用。
 - `plugins/eslint/*` — 本地 ESLint 插件（i18n JSON、no-debug、package.json、递归排序）。
 
 ## 本 fork 相对上游的改动（改代码时注意别改回去）
