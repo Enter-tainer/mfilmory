@@ -66,7 +66,13 @@ function createItemXml(photo: PhotoManifestItem, baseUrl: string): string {
       ? photo.thumbnailUrl
       : `${baseUrl}${photo.thumbnailUrl.startsWith('/') ? '' : '/'}${photo.thumbnailUrl}`
     // Simple mime type guess
-    const mimeType = thumbUrl.endsWith('.webp') ? 'image/webp' : thumbUrl.endsWith('.png') ? 'image/png' : 'image/jpeg'
+    const mimeType = thumbUrl.endsWith('.avif')
+      ? 'image/avif'
+      : thumbUrl.endsWith('.webp')
+        ? 'image/webp'
+        : thumbUrl.endsWith('.png')
+          ? 'image/png'
+          : 'image/jpeg'
     enclosure = `      <enclosure url="${escapeXml(thumbUrl)}" type="${mimeType}" length="0" />`
   }
 

@@ -9,8 +9,7 @@ import type { Sharp } from 'sharp'
 import { HEIC_FORMATS } from '../constants/index.js'
 import { extractExifData } from '../image/exif.js'
 import { calculateHistogramAndAnalyzeTone } from '../image/histogram.js'
-import { generateThumbnailAndBlurhash, thumbnailExists } from '../image/thumbnail.js'
-import { workdir } from '../path.js'
+import { generateThumbnailAndBlurhash, getThumbnailPaths, thumbnailExists } from '../image/thumbnail.js'
 import { getPhotoExecutionContext } from './execution-context.js'
 import { getGlobalLoggers } from './logger-adapter.js'
 import type { PhotoProcessorOptions } from './processor.js'
@@ -43,9 +42,8 @@ export async function processThumbnailAndBlurhash(
     && (await thumbnailExists(photoId))
   ) {
     try {
-      const thumbnailPath = path.join(workdir, 'public/thumbnails', `${photoId}.jpg`)
+      const { thumbnailPath, thumbnailUrl } = getThumbnailPaths(photoId)
       const thumbnailBuffer = await fs.readFile(thumbnailPath)
-      const thumbnailUrl = `/thumbnails/${photoId}.jpg`
 
       loggers.blurhash.info(`复用现有 blurhash: ${photoId}`)
       loggers.thumbnail.info(`复用现有缩略图：${photoId}`)

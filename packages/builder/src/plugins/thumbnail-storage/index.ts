@@ -3,7 +3,7 @@ import type { S3CompatibleConfig, StorageConfig } from '../../storage/interfaces
 import type { BuilderPlugin } from '../types.js'
 import type { ThumbnailPluginData } from './shared.js'
 import {
-  DEFAULT_CONTENT_TYPE,
+  contentTypeFromFilename,
   DEFAULT_DIRECTORY,
   THUMBNAIL_PLUGIN_DATA_KEY,
   THUMBNAIL_PLUGIN_SYMBOL,
@@ -97,7 +97,8 @@ export default function thumbnailStoragePlugin(options: ThumbnailStoragePluginOp
         const fallbackStorage = config.user?.storage ?? builder.getStorageConfig()
         const storageConfig = (options.storageConfig ?? fallbackStorage) as StorageConfig
         const directory = normalizeDirectory(options.directory)
-        const contentType = options.contentType ?? DEFAULT_CONTENT_TYPE
+        // 空字符串 = 上传时按文件名的扩展名推断 content-type
+        const contentType = options.contentType ?? ''
 
         if (storageConfig.provider === 'eagle') {
           logger.thumbnail.warn('缩略图上传插件不支持 Eagle 存储提供商，已自动禁用。')
@@ -160,7 +161,7 @@ export default function thumbnailStoragePlugin(options: ThumbnailStoragePluginOp
         if (!state.uploaded.has(remoteKey)) {
           try {
             await storageManager.uploadFile(remoteKey, data.buffer, {
-              contentType: resolved.contentType,
+              contentType: resolved.contentType || contentTypeFromFilename(data.fileName),
             })
             state.uploaded.add(remoteKey)
           } catch (error) {

@@ -15,6 +15,7 @@ import {
   isBitmap,
   preprocessImageBuffer,
 } from '../image/processor.js'
+import { getThumbnailFilename } from '../image/thumbnail.js'
 import type { PluginRunState } from '../plugins/manager.js'
 import { THUMBNAIL_PLUGIN_DATA_KEY } from '../plugins/thumbnail-storage/shared.js'
 import type { S3ObjectLike } from '../types/s3.js'
@@ -190,7 +191,7 @@ export async function executePhotoProcessingPipeline(
 
     context.pluginData[THUMBNAIL_PLUGIN_DATA_KEY] = {
       photoId,
-      fileName: `${photoId}.jpg`,
+      fileName: getThumbnailFilename(photoId),
       buffer: thumbnailResult.thumbnailBuffer,
       localUrl: thumbnailResult.thumbnailUrl,
     }

@@ -6,6 +6,7 @@ import type { ExifInfo } from '@afilmory/og-renderer'
 import { renderOgImage } from '@afilmory/og-renderer'
 import type { PhotoManifestItem } from '@afilmory/typing'
 import type { SatoriOptions } from 'satori'
+import sharp from 'sharp'
 
 import type { Logger } from '../../logger/index.js'
 import { workdir } from '../../path.js'
@@ -197,11 +198,14 @@ function bufferToDataUrl(buffer: Buffer, contentType: string): string {
   return `data:${contentType};base64,${base64}`
 }
 
-function guessContentType(thumbnailUrl: string): string {
-  const lowered = thumbnailUrl.toLowerCase()
-  if (lowered.endsWith('.png')) return 'image/png'
-  if (lowered.endsWith('.webp')) return 'image/webp'
-  return 'image/jpeg'
+/**
+ * satori / resvg 只可靠地接受 PNG/JPEG 作为 <img> 输入：WebP 会被静默丢弃，
+ * AVIF 会直接抛 `t is not iterable`。缩略图现在是 AVIF，所以这里必须先用 sharp
+ * 解码再重新编码成 PNG，而不是把原始字节塞进 data URL。
+ */
+async function toPngDataUrl(input: Buffer): Promise<string> {
+  const png = await sharp(input).png().toBuffer()
+  return bufferToDataUrl(png, 'image/png')
 }
 
 async function resolveThumbnailDataUrl(
@@ -211,20 +215,22 @@ async function resolveThumbnailDataUrl(
 ): Promise<string | null> {
   // Prefer the in-memory thumbnail to avoid extra reads; fall back to URLs when needed.
   if (pluginData?.buffer) {
-    return bufferToDataUrl(pluginData.buffer, 'image/jpeg')
+    try {
+      return await toPngDataUrl(pluginData.buffer)
+    } catch (error) {
+      logger.thumbnail?.warn?.(`OG image plugin: failed to decode in-memory thumbnail for ${item.id}`, error)
+    }
   }
 
   const thumbnailUrl = pluginData?.localUrl || item.thumbnailUrl
   if (!thumbnailUrl) return null
-
-  const contentType = guessContentType(thumbnailUrl)
 
   if (/^https?:\/\//i.test(thumbnailUrl)) {
     try {
       const response = await fetch(thumbnailUrl)
       if (response.ok) {
         const arrayBuffer = await response.arrayBuffer()
-        return bufferToDataUrl(Buffer.from(arrayBuffer), response.headers.get('content-type') ?? contentType)
+        return await toPngDataUrl(Buffer.from(arrayBuffer))
       }
     } catch (error) {
       logger.thumbnail?.warn?.(`OG image plugin: failed to fetch remote thumbnail ${thumbnailUrl}`, error)
@@ -236,7 +242,7 @@ async function resolveThumbnailDataUrl(
 
   try {
     const localBuffer = await readFile(localPath)
-    return bufferToDataUrl(localBuffer, contentType)
+    return await toPngDataUrl(localBuffer)
   } catch (error) {
     logger.thumbnail?.debug?.(`OG image plugin: could not read local thumbnail ${localPath}`, error)
     return null

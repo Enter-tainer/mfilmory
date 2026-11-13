@@ -4,6 +4,7 @@ import path, { basename } from 'node:path'
 import { workdir } from '@afilmory/builder/path.js'
 import type { AfilmoryManifest, CameraInfo, LensInfo, PhotoManifestItem } from '@afilmory/typing'
 
+import { getThumbnailFilename, thumbnailExists } from '../image/thumbnail.js'
 import { logger } from '../logger/index.js'
 import type { S3ObjectLike } from '../types/s3.js'
 import { migrateManifestFileIfNeeded } from './migrate.js'
@@ -107,7 +108,19 @@ export async function handleDeletedPhotos(items: PhotoManifestItem[]): Promise<n
   const manifestKeySet = new Set(items.map((item) => item.id))
 
   for (const thumbnail of allThumbnails) {
-    if (!manifestKeySet.has(basename(thumbnail, '.jpg'))) {
+    const photoId = basename(thumbnail, path.extname(thumbnail))
+    const isCurrentFormat = thumbnail === getThumbnailFilename(photoId)
+
+    if (!manifestKeySet.has(photoId)) {
+      await fs.unlink(path.join(workdir, 'public/thumbnails', thumbnail))
+      deletedCount++
+      continue
+    }
+
+    // 已知照片但文件名不是当前格式（例如切到 AVIF 后残留的 .jpg）：
+    // 只有在当前格式的文件确实存在时才删，避免 `--force-manifest` 这种不重生成
+    // 缩略图的模式把唯一一份缩略图删掉。
+    if (!isCurrentFormat && (await thumbnailExists(photoId))) {
       await fs.unlink(path.join(workdir, 'public/thumbnails', thumbnail))
       deletedCount++
     }

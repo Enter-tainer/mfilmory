@@ -103,6 +103,18 @@ pnpm build            # 把 manifest 内联进 SPA，产物在 apps/web/dist
 
 两者都在 `.gitignore` 里（体积大 / 因站点而异），所以**全新克隆后第一次 `pnpm build` 会把存储里的照片全部处理一遍**（并重新上传缩略图 / OG 图到存储）。日常增量构建只需要保留这两个缓存即可。
 
+### 图片格式
+
+| 产物 | 格式 | 参数 | 说明 |
+| --- | --- | --- | --- |
+| 缩略图（`600px` 宽） | **AVIF** | `quality: 80` | 体积约为原来 JPEG q100 的 40%，实测 PSNR 与 q100 持平甚至更好；浏览器原生解码（Chrome 85+ / Safari 16.4+ / Firefox 93+），前端不需要任何转换 |
+| OG 卡（分享图） | PNG | — | 设计待重做（Plane TECH-84），设计定了再改格式。**OG 永远不要用 AVIF**：跨平台实测只有 Facebook 支持 |
+
+- 缩略图文件名/扩展名统一由 `packages/builder/src/image/thumbnail.ts` 的 `getThumbnailFilename()` 提供，不要再硬编码 `.jpg`（上游 #259 就是这么坏的）。
+- 换格式要全量重生成：`pnpm build:manifest -- --force-thumbnails`。残留的旧格式文件由 `handleDeletedPhotos` 清理——只在新格式文件已存在时才删，避免 `--force-manifest`（不重生成缩略图）把唯一副本删掉。
+- 远端存储里的旧格式对象**不会**自动删（`thumbnail-storage` 把自己的前缀排除在扫描外）：用 `pnpm cleanup:thumbnails` 统计、`pnpm cleanup:thumbnails -- --delete` 清理。
+- OG 渲染链（satori → resvg）只可靠接受 PNG/JPEG 输入：WebP 会被静默丢弃，AVIF 直接抛 `t is not iterable`。所以 `og-image-storage` 会先用 sharp 把缩略图解码重编码成 PNG 再交给 satori，换缩略图格式时不要绕过这一步。
+
 ### 开发
 
 ```bash
