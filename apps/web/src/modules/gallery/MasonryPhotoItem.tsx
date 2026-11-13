@@ -14,10 +14,29 @@ import {
 } from '~/icons'
 import { isMobileDevice } from '~/lib/device-viewport'
 import { ImageLoaderManager } from '~/lib/image-loader-manager'
+import { prefetchViewerRouteNow } from '~/lib/prefetch-viewer'
 import { formatExifData } from '~/modules/metadata/formatExifData'
 import type { PhotoManifest } from '~/types/photo'
 
-export const MasonryPhotoItem = memo(({ data, width }: { data: PhotoManifest; width: number }) => {
+/**
+ * 前 N 张（首屏大致能看见的范围）用高优先级加载，剩下的降到 low。
+ *
+ * 网格里所有缩略图都是 `loading="lazy"` 且同优先级时，浏览器会一次性发起 ~20 个
+ * 同权重请求平摊带宽，LCP 那张要等所有请求各分到一勺才完成。给首屏的几张提优先级、
+ * 其余降级后，LCP 候选图能先拿到大部分带宽。
+ */
+const EAGER_IMAGE_COUNT = 8
+
+export const MasonryPhotoItem = memo(({
+  data,
+  width,
+  index = Number.POSITIVE_INFINITY,
+}: {
+  data: PhotoManifest
+  width: number
+  index?: number
+}) => {
+  const isAboveTheFold = index < EAGER_IMAGE_COUNT
   const photos = useContextPhotos()
   const photoViewer = usePhotoViewer()
   const { t } = useTranslation()
@@ -123,6 +142,10 @@ export const MasonryPhotoItem = memo(({ data, width }: { data: PhotoManifest; wi
 
   // Live Photo/Motion Photo hover 处理（仅在桌面端）
   const handleMouseEnter = useCallback(() => {
+    // 用户的鼠标停到某张照片上，就是「可能要看大图」的明确意图 —— 这时候再去取 viewer chunk，
+    // 既不抢首屏缩略图的带宽，又足够早（点开时基本已经下载完）。
+    prefetchViewerRouteNow()
+
     if (isMobileDevice || !hasVideo || !livePhotoVideoLoaded || isPlayingLivePhoto || isConvertingVideo) {
       return
     }
@@ -188,7 +211,9 @@ export const MasonryPhotoItem = memo(({ data, width }: { data: PhotoManifest; wi
           ref={imageRef}
           src={data.thumbnailUrl}
           alt={data.title}
-          loading="lazy"
+          loading={isAboveTheFold ? 'eager' : 'lazy'}
+          fetchPriority={isAboveTheFold ? 'high' : 'low'}
+          decoding="async"
           className={'absolute inset-0 h-full w-full object-cover duration-300 group-hover:scale-105'}
           onLoad={handleImageLoad}
           onError={handleImageError}
