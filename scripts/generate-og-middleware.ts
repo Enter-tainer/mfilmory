@@ -22,7 +22,8 @@ import { CloudflareMiddlewareVendor } from '../packages/builder/src/plugins/og-i
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const target = path.join(root, 'functions', '_middleware.ts')
-const argv = process.argv.slice(2)
+// drop the bare `--` pnpm inserts when invoked as `pnpm og:middleware -- --check`
+const argv = process.argv.slice(2).filter(arg => arg !== '--')
 const argValue = (name: string) => {
   const hit = argv.find(a => a.startsWith(`--${name}=`))
   return hit ? hit.slice(`--${name}=`.length) : undefined

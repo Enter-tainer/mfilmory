@@ -23,7 +23,8 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const argv = process.argv.slice(2)
+// drop the bare `--` pnpm inserts when invoked as `pnpm deploy:preview -- --flag`
+const argv = process.argv.slice(2).filter(arg => arg !== '--')
 const has = flag => argv.includes(flag)
 const value = (name, fallback) => {
   const hit = argv.find(a => a.startsWith(`--${name}=`))
