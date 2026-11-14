@@ -1,7 +1,30 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
-import type { OutputBundle, Plugin } from 'vite'
+import type { Plugin } from 'vite'
+
+/**
+ * 本文件只用到产物条目的 `type` / `code` / `source`，所以本地声明一个结构化类型，
+ * 而不是 `import type { OutputBundle } from 'vite'`。
+ *
+ * 原因：Vite 8 的 `dist/node/index.d.ts` 里 `OutputBundle` 是从 `rolldown` **局部 import**
+ * 进来的，并没有从 `vite` 再导出（`export {...}` 块里没有它）。所以要拿这个类型只能从
+ * `rolldown` 拿，而 `rolldown` 是 `vite` 的传递依赖 —— 直接 import 会变成幻影依赖。
+ *
+ * 这个坑在 PR #11 单独存在时**不会暴露**：`apps/web/tsconfig.json` 的 `include` 里没有
+ * `plugins` 目录，插件代码根本不参与类型检查。直到它与「把 plugins 目录纳入 type-check」
+ * 的改动一起合入，`vite build` 里的 `vite-plugin-checker` 才把这个错误变成构建失败。
+ */
+type OutputFileLike =
+  | {
+    type: 'chunk'
+    code?: string
+    /** Vite 在 chunk 上挂的元信息；只有 `importedCss` 会被本插件改写 */
+    viteMetadata?: { importedCss?: Set<string> | string[] }
+  }
+  | { type: 'asset', source: string | Uint8Array }
+
+type BundleLike = Record<string, OutputFileLike>
 
 /**
  * 把主样式表内联进 HTML。
@@ -225,7 +248,7 @@ export function inlineMainCssPlugin(): Plugin {
  * 把文件名从所有 chunk 的 `viteMetadata.importedCss` 里摘掉（兼容 Set 与数组两种形态）。
  * Vite 8 里它是 `Set<string>`，写兼容是怕以后变成数组后这里静默不生效。
  */
-function dropImportedCssReferences(bundle: OutputBundle, fileNames: Set<string>) {
+function dropImportedCssReferences(bundle: BundleLike, fileNames: Set<string>) {
   for (const output of Object.values(bundle)) {
     if (output.type !== 'chunk') {
       continue
