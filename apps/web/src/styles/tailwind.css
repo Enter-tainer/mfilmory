@@ -1,11 +1,16 @@
 @import 'tailwindcss';
-/* 没用到 @tailwindcss/typography 的 `.prose`（全仓 0 处引用），但插件会无条件输出
-   14.5 KB 的规则；直接不引入。 */
+/* 全仓 0 处 `.prose`，但 @tailwindcss/typography 会无条件输出十几 KB 规则。
+   依赖也已从 apps/web/package.json 里摘掉 —— 要用回 prose 得同时把依赖和这一行加回来。 */
 @plugin '@egoist/tailwindcss-icons';
 /* 这个站从不用 daisyui 的组件类：UI 全部来自 packages/ui（radix + tailwind-variants），
    只有 daisyui 的 theme 变量（--color-primary / --color-base-100 …）在被引用。
-   所以只保留它的 base 层（根色、scrollbar、properties 等），组件层整层不输出，
-   实测首屏 CSS 少 ~100 KB。 */
+   所以只保留它的 base 层（根色、scrollbar、properties 等），组件层整层不输出。
+
+   ⚠️ 这个白名单是**手工维护**的：将来真要用某个 daisyui 组件类（`btn` / `card` /
+   `modal` …），必须先把对应的 layer 加回 `include:`，否则样式静默不生效、构建不会报错。
+
+   和上面去掉 typography 合计：首屏 CSS 428,025 → 235,891 B 原始字节
+   （brotli-11 42,238 → 26,843 B）。 */
 @plugin 'daisyui' {
   include:
     rootcolor, svg, rootscrollgutter, properties, scrollbar, rootscrolllock, join, glass, radius,
@@ -255,4 +260,3 @@ html body {
     transform: translateX(4px);
   }
 }
-
