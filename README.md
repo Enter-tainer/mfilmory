@@ -153,6 +153,21 @@ pnpm lint            # eslint --fix
 设 `AFILMORY_EMBED_MANIFEST=true` 可切回「整份内联进 HTML」的老行为（`pnpm dev` 默认内联）。
 静态资源的缓存头在 `apps/web/public/_headers`（Cloudflare Pages 格式），带 hash 的资源一年 immutable。
 
+**Pages Function 的调用范围由 `_routes.json` 控制，别让它吞掉整站**：
+
+- `apps/web/public/_routes.json` 只把 `/photos/*` 交给 Pages Function（OG 中间件）。旧配置写的是
+  `"include": ["/*"]`，于是**每条** HTML 请求都会进 Function、响应 `cf-cache-status` 恒为 `DYNAMIC`。
+  收窄之后其余路径由静态资源处理器直接响应（SPA 回退不依赖 Function：没有顶层 `404.html` 时
+  Pages 对未命中的路径本来就回 `/`）。
+- **`_headers` 不作用于 Pages Function 生成的响应**，所以 `/photos/*` 的缓存头只能在中间件里给
+  Response 加；写在 `_headers` 里对它无效。
+- `_headers` 按**请求 URL** 匹配，`/` 这条规则只覆盖根路径，`/map`、`/photos/:id` 这类 SPA 深链
+  拿不到它。想让深链也命中边缘缓存得按路由逐条写（`/*` 还会和 `/assets/*` 的 immutable 逗号拼接成
+  冲突指令，官方专门警告过），收益与风险都不划算，所以 **HTML 仍保持 `max-age=0, must-revalidate`**。
+- 以后若要给 HTML 加共享缓存，注意 `s-maxage` 会**禁用** `stale-while-revalidate`（RFC 语义：
+  s-maxage 隐含 proxy-revalidate），且 `max-age=0` + SWR 允许浏览器 24h 内先渲染旧 HTML——
+  旧 HTML 引用的 hashed chunk 在新部署后可能已不存在，会白屏。
+
 #### Cloudflare Pages
 
 现网项目是 **`mgt-afilmory`**（`mgt-afilmory.pages.dev` + `gallery.mgt.moe`），历史部署全部是 **CLI 部署**、生产分支 `main`。
