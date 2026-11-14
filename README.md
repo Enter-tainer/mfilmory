@@ -79,6 +79,13 @@ pnpm install          # 会自动 seed config.json / builder.config.ts（见 scr
 | `builder.config.ts` | 照片来源：S3 / R2 / 本地目录、并发、插件 | 否（`builder.config.default.ts` 是模板） |
 | `.env` | 凭据：`S3_*`、`GIT_TOKEN`、`MAPBOX_TOKEN` | 否 |
 
+`config.json` 里的 `author.avatar` 建议指向 `apps/web/public/` 下的**本地小图**（例如 `/avatar.webp`），
+不要直接引用头像托管站点的原图：它会被渲染成 28–64 CSS px，一张 300×300 的 JPEG 是 16.5 KB，
+而 96×96 的 WebP 只要 2.9 KB（−82%），且本地文件不依赖第三方域名的可用性和 TLS 握手。
+仓库里的 `apps/web/public/avatar.webp` 就是这样一个例子（96×96，2.9 KB）。两处渲染
+（`PageHeaderLeft` / `MasonryHeaderMasonryItem`）都显式带了 `width`/`height`、
+`decoding="async"` 和 `fetchPriority="low"`，避免它跟首屏 LCP 缩略图抢带宽。
+
 ### 路线 A：先跑起来（本地 demo，不需要 S3）
 
 ```bash

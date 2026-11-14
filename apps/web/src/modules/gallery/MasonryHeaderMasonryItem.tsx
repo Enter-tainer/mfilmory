@@ -57,7 +57,15 @@ export const MasonryHeaderMasonryItem = ({ style, className }: { style?: React.C
           <div className="relative">
             {siteConfig.author.avatar && (
               <AvatarPrimitive.Root>
-                <AvatarPrimitive.Image src={siteConfig.author.avatar} className="size-16 rounded-full" />
+                <AvatarPrimitive.Image
+                  src={siteConfig.author.avatar}
+                  className="size-16 rounded-full"
+                  alt={siteConfig.author.name}
+                  width={96}
+                  height={96}
+                  decoding="async"
+                  fetchPriority="low"
+                />
                 <AvatarPrimitive.Fallback>
                   <div className="bg-material-medium size-16 rounded-full" />
                 </AvatarPrimitive.Fallback>

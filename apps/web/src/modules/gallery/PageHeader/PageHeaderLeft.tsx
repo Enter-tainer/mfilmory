@@ -26,6 +26,12 @@ export const PageHeaderLeft = () => {
             src={siteConfig.author.avatar}
             className="size-7 rounded-lg lg:size-8"
             alt={siteConfig.author.name}
+            // 头像只有 28–32 CSS px 大，却常在首屏 HTML 里跟 LCP 缩略图同时被请求。
+            // 明确标低优先级 + 给出宽高（避免 Radix 的 fallback 切换造成位移）。
+            width={96}
+            height={96}
+            decoding="async"
+            fetchPriority="low"
           />
           <AvatarPrimitive.Fallback>
             <div className="flex size-7 items-center justify-center rounded-lg bg-white/10 lg:size-8">
