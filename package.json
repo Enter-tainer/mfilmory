@@ -23,6 +23,7 @@
     "deploy:preview": "node scripts/deploy.mjs --preview",
     "migrate:manifest": "tsx scripts/migrate-manifest.ts",
     "cleanup:assets": "tsx scripts/cleanup-stale-assets.ts",
+    "refresh:cache": "tsx scripts/refresh-media-cache-control.ts",
     "type-check": "pnpm run -r type-check",
     "perf:bytes": "node scripts/perf/critical-bytes.mjs apps/web/dist",
     "perf:manifest": "node scripts/perf/assert-manifest-fields.mjs apps/web/src/data/photos-manifest.json apps/web/dist",
