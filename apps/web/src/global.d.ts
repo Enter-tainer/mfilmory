@@ -2,8 +2,6 @@ import type { AfilmoryManifest } from '@afilmory/builder'
 import type { SiteConfig } from '@config'
 import type { FC, PropsWithChildren } from 'react'
 
-import type { InjectConfig } from './config/types'
-
 declare global {
   export type Nullable<T> = T | null | undefined
 
@@ -24,7 +22,6 @@ declare global {
   const __MANIFEST__: AfilmoryManifest | null
   const __SITE_CONFIG__: Partial<SiteConfig>
 
-  const __CONFIG__: InjectConfig
   /**
    * This function is a macro, will replace in the build stage.
    */

@@ -5,21 +5,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@afilmory/ui'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { LogIn, LogOut, User } from 'lucide-react'
+import { useAtom, useSetAtom } from 'jotai'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { Drawer } from 'vaul'
 
 import { gallerySettingAtom, isCommandPaletteOpenAtom } from '~/atoms/app'
-import { sessionMembershipAtom, sessionUserAtom } from '~/atoms/session'
-import { injectConfig, siteConfig } from '~/config'
+import { siteConfig } from '~/config'
 import { useMobile } from '~/hooks/useMobile'
-import { authApi, canAccessDashboard } from '~/lib/api/auth'
 
-import { UserAvatar } from '../../social/comments/UserAvatar'
 import { ViewPanel } from '../panels/ViewPanel'
 import { LanguageSwitcher } from './LanguageSwitcher'
 import { ActionIconButton, resolveSocialUrl } from './utils'
@@ -30,7 +25,6 @@ export const PageHeaderRight = () => {
   const [gallerySetting] = useAtom(gallerySettingAtom)
   const setCommandPaletteOpen = useSetAtom(isCommandPaletteOpenAtom)
   const navigate = useNavigate()
-  const sessionUser = useAtomValue(sessionUserAtom)
 
   // 计算视图设置是否有自定义配置
   const hasViewCustomization = gallerySetting.columns !== 'auto' || gallerySetting.sortOrder !== 'desc'
@@ -84,13 +78,6 @@ export const PageHeaderRight = () => {
 
         {isMobile && <MoreActionMenu />}
       </div>
-
-      {/* Auth Section - Only show when useCloud is true */}
-      {injectConfig.useCloud && (
-        <div className={`bg-material-medium/40 flex items-center gap-1 ${sessionUser ? 'rounded-full' : 'rounded-lg'}`}>
-          {sessionUser ? <UserMenuButton user={sessionUser} /> : <LoginButton />}
-        </div>
-      )}
     </div>
   )
 }
@@ -247,159 +234,5 @@ const MobileViewButton = ({
         </Drawer.Portal>
       </Drawer.Root>
     </>
-  )
-}
-
-// 登录按钮
-const LoginButton = () => {
-  const { t } = useTranslation()
-  const [isOpen, setIsOpen] = useState(false)
-  const { data: socialProviders } = useQuery({
-    queryKey: ['socialProviders'],
-    queryFn: authApi.getSocialProviders,
-    enabled: isOpen,
-  })
-
-  const handleSignIn = async (provider: string) => {
-    try {
-      const { url } = await authApi.signInSocial(provider)
-      window.location.href = url
-    }
-    catch (error) {
-      console.error('Sign in failed:', error)
-    }
-  }
-
-  return (
-    <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="relative flex size-7 items-center justify-center rounded text-white/60 transition-colors duration-200 hover:bg-white/10 hover:text-white lg:size-8"
-          title={t('action.login')}
-          aria-label={t('action.login')}
-        >
-          <LogIn className="size-3.5 lg:size-4" aria-hidden="true" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[200px]">
-        <div className="px-2 py-1.5 text-xs text-white/50">{t('comments.chooseProvider')}</div>
-        <DropdownMenuSeparator />
-        {socialProviders?.providers.map(provider => (
-          <DropdownMenuItem
-            key={provider.id}
-            onClick={() => handleSignIn(provider.id)}
-            icon={<LoginPlatformIcon provider={provider.id} />}
-          >
-            {t('comments.signInWith', { provider: provider.name })}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
-
-// 登录平台图标
-const LoginPlatformIcon = ({ provider }: { provider: string }) => {
-  switch (provider) {
-    case 'apple': {
-      return <i className="i-simple-icons-apple text-base" />
-    }
-    case 'github': {
-      return <i className="i-simple-icons-github text-base" />
-    }
-    case 'google': {
-      return (
-        <svg className="size-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 262">
-          <path
-            fill="#4285F4"
-            d="M255.878 133.451c0-10.734-.871-18.567-2.756-26.69H130.55v48.448h71.947c-1.45 12.04-9.283 30.172-26.69 42.356l-.244 1.622l38.755 30.023l2.685.268c24.659-22.774 38.875-56.282 38.875-96.027"
-          />
-          <path
-            fill="#34A853"
-            d="M130.55 261.1c35.248 0 64.839-11.605 86.453-31.622l-41.196-31.913c-11.024 7.688-25.82 13.055-45.257 13.055c-34.523 0-63.824-22.773-74.269-54.25l-1.531.13l-40.298 31.187l-.527 1.465C35.393 231.798 79.49 261.1 130.55 261.1"
-          />
-          <path
-            fill="#FBBC05"
-            d="M56.281 156.37c-2.756-8.123-4.351-16.827-4.351-25.82c0-8.994 1.595-17.697 4.206-25.82l-.073-1.73L15.26 71.312l-1.335.635C5.077 89.644 0 109.517 0 130.55s5.077 40.905 13.925 58.602z"
-          />
-          <path
-            fill="#EB4335"
-            d="M130.55 50.479c24.514 0 41.05 10.589 50.479 19.438l36.844-35.974C195.245 12.91 165.798 0 130.55 0C79.49 0 35.393 29.301 13.925 71.947l42.211 32.783c10.59-31.477 39.891-54.251 74.414-54.251"
-          />
-        </svg>
-      )
-    }
-    default: {
-      return <User className="size-4" />
-    }
-  }
-}
-
-// 用户菜单按钮
-const UserMenuButton = ({
-  user,
-}: {
-  user: { id: string, name?: string | null, image?: string | null, role?: string | null }
-}) => {
-  const { t } = useTranslation()
-  const setSessionUser = useSetAtom(sessionUserAtom)
-  const setSessionMembership = useSetAtom(sessionMembershipAtom)
-  const requestedMembership = useAtomValue(sessionMembershipAtom)
-  const queryClient = useQueryClient()
-  const [isSigningOut, setIsSigningOut] = useState(false)
-  const showDashboard = canAccessDashboard({ user, requestedMembership })
-
-  const handleSignOut = async () => {
-    if (isSigningOut) {
-      return
-    }
-    setIsSigningOut(true)
-    try {
-      await authApi.signOut()
-      setSessionUser(null)
-      setSessionMembership(null)
-      await queryClient.invalidateQueries({ queryKey: ['session'] })
-    }
-    catch (error) {
-      console.error('Sign out failed:', error)
-    }
-    finally {
-      setIsSigningOut(false)
-    }
-  }
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="relative flex size-7 items-center justify-center rounded text-white/60 transition-colors duration-200 hover:bg-white/10 hover:text-white lg:size-8"
-          title={user.name || user.id}
-          aria-label={`User menu: ${user.name || user.id}`}
-        >
-          <UserAvatar image={user.image} name={user.name || user.id} fallback="?" size={28} className="lg:size-8" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[200px]">
-        <div className="px-2 py-1.5">
-          <div className="text-sm font-medium text-white/90">{user.name || user.id}</div>
-        </div>
-        <DropdownMenuSeparator />
-        {showDashboard && (
-          <DropdownMenuItem
-            onClick={() => {
-              window.location.href = '/platform'
-            }}
-            icon={<i className="i-mingcute-settings-3-line text-base" />}
-          >
-            {t('action.dashboard')}
-          </DropdownMenuItem>
-        )}
-        <DropdownMenuItem onClick={handleSignOut} icon={<LogOut className="size-4" />} disabled={isSigningOut}>
-          {t('action.signOut')}
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
   )
 }

@@ -46,8 +46,8 @@ walking *down a family*, never by picking a different hue.
 **Rules**
 
 - Never write a raw hex, `rgb()`, or a Tailwind neutral ramp (`gray-*`, `zinc-*`, `slate-*`) for
-  UI chrome. The only legitimate raw hex is a third-party brand mark (e.g. the Google `G` in
-  `SignInPanel`).
+  UI chrome. The only legitimate raw hex is a third-party brand mark (a vendor logo drawn as
+  inline SVG).
 - Never hand-roll a light/dark pair (`text-gray-900 dark:text-gray-50`). UIKit tokens already
   resolve per scheme; writing the pair yourself means you picked the wrong token.
 - `white/N` and `black/N` are allowed **only** on top of a photograph, where the backdrop is an
@@ -101,7 +101,7 @@ together: a material fill, a backdrop blur matched to its role, and a hairline b
 
 | Role | Class | Canonical examples |
 | --- | --- | --- |
-| Floating panel, menu, popover, toast, viewer chrome | `backdrop-blur-2xl` | `context-menu`, `dropdown-menu`, `hover-card`, `dialog`, `sonner`, `tooltip`, `InspectorPanel`, `ExifPanel`, `FloatingActionButton`, `PhotoViewer` chrome |
+| Floating panel, menu, popover, toast, viewer chrome | `backdrop-blur-2xl` | `context-menu`, `dropdown-menu`, `hover-card`, `dialog`, `sonner`, `tooltip`, `ExifPanel`, `FloatingActionButton`, `PhotoViewer` chrome |
 | Secondary control floating **on a photograph** | `backdrop-blur-md` | `MasonryPhotoItem` badges, `ListView` overlays, map markers, `FilterChip`, `GlassButton` |
 | Scrim / overlay behind a modal | `backdrop-blur-sm` | `Dialog.Overlay`, `ActionPanel` overlay |
 | Top / bottom fade band over scrolling content | `<LinearBlur />` | `PageHeader`, `PageFooter` |
@@ -311,8 +311,8 @@ floating overlay above it.
 - Secondary actions live in a `FloatingActionButton` cluster, not a toolbar.
 - Desktop-only affordances (viewer prev/next arrows) start at `opacity-0` and appear on
   `group-hover`.
-- Metadata — EXIF, histogram, map — lives in a collapsible `InspectorPanel`, never occupying
-  layout by default.
+- Metadata — EXIF, histogram, map — lives in a collapsible `ExifPanel` (desktop) /
+  `MobilePhotoInspectorSheet` (mobile), never occupying layout by default.
 
 ### 8.2 The grid
 
@@ -348,8 +348,10 @@ Anything that needs the scroll container must read `ScrollElementContext` rather
 <i className="i-mingcute-information-line" />
 ```
 
-`i-simple-icons-*` is allowed for third-party brand marks only (GitHub, Google). Do not add new
-`lucide-react` imports — the existing ones are a deviation (§13.4).
+`i-simple-icons-*` is allowed for third-party brand marks only (GitHub, Google) — note the
+`@iconify-json/simple-icons` collection is **not installed** in this fork (its last users were the
+deleted social UI); re-add the devDependency before using it. Do not add new `lucide-react`
+imports — the existing ones are a deviation (§13.4).
 
 Project-specific icons live in `apps/web/src/icons` and are named after the source set
 (`TablerAperture`, `CarbonIsoOutline`).
@@ -423,9 +425,8 @@ Existing code is not required to migrate immediately; new code must not add to t
 
 | Where | What |
 | --- | --- |
-| `HistogramChart`, `ActionPanel`, `PageHeaderRight`, `Reaction`, `manifest.tsx`, `PhotoViewer`, `ActionButton` | `backdrop-blur-xl` — a step that has no assigned role |
+| `HistogramChart`, `ActionPanel`, `PageHeaderRight`, `manifest.tsx`, `PhotoViewer`, `ActionButton` | `backdrop-blur-xl` — a step that has no assigned role |
 | `MobilePhotoInspectorSheet`, `ScrollArea` | `backdrop-blur-3xl` |
-| `Reaction` | `backdrop-blur-lg` |
 | `ActiveFiltersHero/index.tsx` (×2), `inspector/LoadingIndicator.tsx` | bare `backdrop-blur` (Tailwind's unsuffixed 8px default) |
 | `packages/ui/src/select/index.tsx`, `packages/ui/src/sonner.tsx` | `backdrop-blur-background` — **not a valid Tailwind class**; no `--blur-background` theme key exists, so it compiles to nothing |
 
@@ -436,8 +437,8 @@ Existing code is not required to migrate immediately; new code must not add to t
 
 ### 13.4 Icons
 
-`lucide-react` is imported in 10 files (e.g. `PanelRightOpen` in `PhotoViewer`) alongside the
-129 `i-mingcute-*` usages. Two icon systems, no rule separating them.
+`lucide-react` is imported in 6 files (e.g. `PanelRightOpen` in `PhotoViewer`) alongside the
+105 `i-mingcute-*` usages in `apps/web/src`. Two icon systems, no rule separating them.
 
 ### 13.5 Dead / no-op code
 

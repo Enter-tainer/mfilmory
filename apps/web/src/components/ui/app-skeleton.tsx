@@ -35,15 +35,10 @@ export function AppSkeleton() {
 
           {/* 右侧工具栏 */}
           <div className="flex items-center gap-1 lg:gap-1.5">
-            {/* 第一个按钮组：搜索、地图、布局 */}
+            {/* 按钮组：搜索、地图、布局、语言 */}
             <div className="flex items-center gap-1 rounded-lg ">
               <Skeleton className="size-7 rounded bg-neutral-700 lg:size-8" />
               <Skeleton className="size-7 rounded bg-neutral-700 lg:size-8" />
-              <Skeleton className="size-7 rounded bg-neutral-700 lg:size-8" />
-            </div>
-
-            {/* 第二个按钮组：登录 */}
-            <div className="flex items-center gap-1 rounded-lg">
               <Skeleton className="size-7 rounded bg-neutral-700 lg:size-8" />
             </div>
           </div>

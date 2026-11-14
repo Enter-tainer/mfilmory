@@ -14,7 +14,7 @@
 | `apps/web` | Vite 8 + React 19 单页应用 —— 画廊 UI、查看器、地图、i18n、PWA manifest |
 | `packages/builder` | 照片流水线 CLI：S3 / 本地 / GitHub / Eagle 同步 → EXIF / 缩略图 / blurhash → `photos-manifest.json` |
 | `packages/data` | `PhotoLoader`，把注入的 manifest 包装成查询结构 |
-| `packages/{typing,ui,hooks,utils,sdk,viewer-motion,webgl-viewer}` | SPA 依赖的共享包（WebGL 查看器、视图动效、UI 原语等） |
+| `packages/{typing,ui,hooks,utils,viewer-motion,webgl-viewer}` | SPA 依赖的共享包（WebGL 查看器、视图动效、UI 原语等）；`packages/sdk` 仍保留但 SPA 已不依赖（见下） |
 | `locales/app` | SPA 文案（en / zh-CN / zh-HK / zh-TW / jp / ko） |
 | `site.config.ts` + `config.json` | 站点展示配置（站名、作者、主题色、地图） |
 | `builder.config.ts` + `.env` | 照片来源与凭据（S3 兼容存储 / 本地目录） |
@@ -45,10 +45,10 @@
 - `thumbnail-storage/`：缩略图上传
 - `geocoding.js`：照片地点反查（`geocodingPlugin`）
 - `github-repo-sync.js`：把 manifest / 缩略图写回 GitHub 仓库
-- `og-image-storage/`：**分享图插件**。卡片就是照片本身（1200×630 满幅 WebP，**不画**黑底/站名/标题），文字交给分享平台原生渲染。其中 `vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk` 就是 **Cloudflare Pages 中间件**：拦截 `/photos/:slug` 的 HTML，把 `og:image` / `twitter:image` 重写到 R2 上的 `.afilmory/og-images/*.webp`，并按 manifest 注入每张照片的 `og:title` / `og:description`（多行 `📸 / 📝 / 📅 / 🗺 / 📍` EXIF 明细）、`<title>` 和单行 `meta[name=description]`
+- `og-image-storage/`：**分享图插件**。卡片就是照片本身（1200×630 满幅 WebP，**不画**黑底/站名/标题），文字交给分享平台原生渲染。其中 `vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk` 就是 **Cloudflare Pages 中间件**，负责两件事：① 拦截 `/photos/:slug` 的 HTML，把 `og:image` / `twitter:image` 重写到 R2 上的 `.afilmory/og-images/*.webp`，并按 manifest 注入每张照片的 `og:title` / `og:description`（多行 `📸 / 📝 / 📅 / 🗺 / 📍` EXIF 明细）、`<title>` 和单行 `meta[name=description]`；② 把分享弹窗用的站内路径 `/og/:photoId` **302** 到同一张 R2 WebP（运行时 manifest 裁掉了 `ogImageUrl`，这样既不用下发给浏览器、也不会让图片破图）
   - 文案规则在 `packages/builder/src/plugins/og-image-storage/photo-text.ts`；照片直放（裁切/缩放）在 `photo-og.ts`
   - 产物写到仓库根 `functions/_middleware.ts`，由 `builder.config.ts` 里的 `ogImagePlugin({ vendor: { type: 'cloudflare-middleware', storageURL } })` 触发
-  - 该文件是**构建产物，不提交**（`.gitignore` 只忽略这精确一个路径）；内容由 `config.json` 的 `url` + `builder.config.ts` 的 `storageURL`（通常即 `.env` 的 `S3_CUSTOM_DOMAIN`）决定。`pnpm build` 会自动生成，也可以用 `pnpm og:middleware` 单独重生成（`-- --check` 校验磁盘上的文件是否最新，`--storage-url=…` 临时覆盖 CDN 地址）
+  - 该文件是**构建产物，不提交**（`.gitignore` 只忽略这精确一个路径）；内容由 `config.json` 的 `url` + `builder.config.ts` 的 `storageURL`（通常即 `.env` 的 `S3_CUSTOM_DOMAIN`）决定。`pnpm build` 会自动生成，也可以用 `pnpm og:middleware` 单独重生成（`-- --check` 校验磁盘上的文件是否最新，**并校验中间件处理的路径（`/photos/*`、`/og/*`）都写进了 `_routes.json` 的 include**；`--storage-url=…` 临时覆盖 CDN 地址）
   - 部署到 Cloudflare Pages 时 **project root 必须是仓库根**（或显式 `--functions-directory`），否则 `functions/` 不会被带上，OG 改写就失效
   - 卡片长什么样（旧卡片 vs 照片直放、三端原生渲染、不同构图、首页卡片）：`docs/og/photo-straight-cards.webp`
 
@@ -63,7 +63,7 @@
 - `apps/mobile` —— 原生 Swift/UIKit iOS App
 - `apps/site` / `apps/docs` / `apps/landing` / `apps/promo` —— Astro 官网、文档站、推广页
 - `docs/`、`.specstory/`、Dockerfile / docker-compose、以及只服务上述部分的 CI workflow
-- 依赖后端才有意义的能力（登录、点赞/评论同步、后台管理）在静态模式下自动降级或缺省
+- 依赖后端才有意义的能力（登录、点赞/评论、后台管理）不是运行时降级，而是**直接删掉了**：`apps/web` 里不再有会话 provider、评论/Reaction、登录入口，也没有 `@tanstack/react-query` / `@afilmory/sdk` / `swr` / `immer` 依赖（TECH-90，入口 JS brotli −14.6 KB）。分享弹窗保留（复制链接 / 系统分享 / 下载原图与预览图）。
 
 ## 快速开始
 
@@ -186,14 +186,15 @@ pnpm lint            # eslint --fix
 
 **Pages Function 的调用范围由 `_routes.json` 控制，别让它吞掉整站**：
 
-- `apps/web/public/_routes.json` 只把 `/photos/*` 交给 Pages Function（OG 中间件）。旧配置写的是
-  `"include": ["/*"]`，于是**每条** HTML 请求都会进 Function、响应 `cf-cache-status` 恒为 `DYNAMIC`。
+- `apps/web/public/_routes.json` 只把 `/photos/*` 与 `/og/*` 交给 Pages Function（OG 中间件 + 分享图跳转）。
+  旧配置写的是 `"include": ["/*"]`，于是**每条** HTML 请求都会进 Function、响应 `cf-cache-status` 恒为 `DYNAMIC`。
   收窄之后其余路径由静态资源处理器直接响应（SPA 回退不依赖 Function：没有顶层 `404.html` 时
-  Pages 对未命中的路径本来就回 `/`）。
+  Pages 对未命中的路径本来就回 `/`）。新增需要 Function 的路径时必须同时加进这个 include 列表，
+  否则请求会落到静态资源/SPA 回退（`/og/*` 就是这么坏过一个版本的：返回 200 text/html，图片永远破图）。
 - **`exclude` 键必须存在，哪怕是空数组**。`wrangler pages deploy` 会按
   `{ version, include: string[], exclude: string[] }` 校验，只写 `include` 会直接让部署失败并报
   `Invalid _routes.json file found`。所以正确写法是
-  `{"version": 1, "include": ["/photos/*"], "exclude": []}`。
+  `{"version": 1, "include": ["/photos/*", "/og/*"], "exclude": []}`。
 - **`_headers` 不作用于 Pages Function 生成的响应**，所以 `/photos/*` 的缓存头只能在中间件里给
   Response 加；写在 `_headers` 里对它无效。
 - `_headers` 按**请求 URL** 匹配，`/` 这条规则只覆盖根路径，`/map`、`/photos/:id` 这类 SPA 深链
@@ -217,7 +218,7 @@ node scripts/deploy.mjs --dry-run          # 只打印将要执行的 wrangler �
 node scripts/deploy.mjs --project=xxx --branch=yyy --dirty
 ```
 
-脚本做的事：`pnpm build`（可 `--skip-build` 跳过）→ 校验 `apps/web/dist/index.html`，`functions/_middleware.ts` 缺失时调用 `pnpm og:middleware` 补生成 → 工作区脏时自动加 `--commit-dirty=true` → 在**仓库根**执行 `pnpx wrangler pages deploy apps/web/dist --project-name mgt-afilmory --branch main`。项目名/分支可用 `CF_PAGES_PROJECT` / `CF_PRODUCTION_BRANCH` / `CF_PREVIEW_BRANCH` 覆盖。
+脚本做的事：`pnpm build`（可 `--skip-build` 跳过）→ 校验 `apps/web/dist/index.html`，`functions/_middleware.ts` 缺失**或与模板不一致**（`pnpm og:middleware -- --check`）时调用 `pnpm og:middleware` 补生成 → 工作区脏时自动加 `--commit-dirty=true` → 在**仓库根**执行 `pnpx wrangler pages deploy apps/web/dist --project-name mgt-afilmory --branch main`。项目名/分支可用 `CF_PAGES_PROJECT` / `CF_PRODUCTION_BRANCH` / `CF_PREVIEW_BRANCH` 覆盖。
 
 等价的裸命令（想手工跑时）：
 
@@ -232,6 +233,17 @@ pnpx wrangler pages deploy apps/web/dist --project-name mgt-afilmory --branch ma
   curl.exe -s https://gallery.mgt.moe/photos/<photoId> | Select-String 'og:image|og:title|og:description'
   # 期望：https://r2-gallery.996404.xyz/mgt-gallery/.afilmory/og-images/<photoId>.webp
   #       og:title 是地名（不是站名），og:description 是逐行 EXIF 明细
+
+  curl.exe -s -o NUL -w '%{http_code} %{redirect_url}' https://gallery.mgt.moe/og/<photoId>
+  # 期望：302  https://r2-gallery.996404.xyz/mgt-gallery/.afilmory/og-images/<photoId>.webp
+  ```
+
+- 本地要验证「OG meta 改写 / 分享预览图跳转」必须在 **Pages 运行时**里跑，`pnpm preview`（纯静态 serve）没有 Functions，`/photos/*` 的 meta 不会被改写、`/og/*` 仍是 404：
+
+  ```powershell
+  pnpm --filter @afilmory/web exec vite build
+  pnpx wrangler pages dev apps/web/dist --port 4820    # 在仓库根执行，自动带上 functions/
+  # 然后：curl.exe -sI http://127.0.0.1:4820/og/<photoId>   # 期望 302 + R2 的 og-images URL
   ```
 
 - 想单独重新生成中间件（改模板/换 CDN 后不必跑整套照片流水线）：
@@ -239,7 +251,7 @@ pnpx wrangler pages deploy apps/web/dist --project-name mgt-afilmory --branch ma
   ```powershell
   pnpm og:middleware                 # 用 .env 里的 S3_CUSTOM_DOMAIN 作 storageURL
   pnpm og:middleware -- --storage-url=https://cdn.example.com/gallery
-  pnpm og:middleware -- --check       # 校验磁盘上的 functions/_middleware.ts 是否最新（该文件不提交，仅供本地检查）
+  pnpm og:middleware -- --check       # 校验磁盘上的 functions/_middleware.ts 是否最新 + 中间件处理的路径都在 _routes.json 里（该文件不提交，仅供本地检查）
   ```
 
 - `apps/web/wrangler.jsonc`（`name: afilmory-web`）只在 `apps/web` 目录里部署时生效，那条路径带不上根 `functions/`，所以**不要**在 `apps/web` 里直接 `wrangler pages deploy`

@@ -119,7 +119,7 @@ LCP 那张要等所有请求各分到一勺。现在前 `EAGER_IMAGE_COUNT = 4` 
   层归属按 `node_modules/daisyui/imports.js` 的 `base` / `components` / `utilities` 三个导出
   对照（5.7.50）：`join` / `glass` / `radius` / `typography` 都是 **utilities**，只产出
   `.join*` / `.glass` / `.rounded-box` `-field` `-selector` / `.prose`。
-  按「类名位置」精确扫全仓 278 个文件、命中 0 处
+  按「类名位置」精确扫全仓源码文件（当期 278 个）、命中 0 处
   （`.join` 的 37 处命中全是 `Array.prototype.join`；`radius-lg` 是 Tailwind 自己的
   `--radius-*` 变量，不是这两个东西）—— 所以四个 utilities 也一起去掉。
 
@@ -145,8 +145,11 @@ LCP 那张要等所有请求各分到一勺。现在前 `EAGER_IMAGE_COUNT = 4` 
 
 ### 6. 后端 SDK 移出入口 chunk（`apps/web/src/lib/client.ts`）
 
+> 后续变更：TECH-90 直接删除了不可达的社交/会话代码与 `@afilmory/sdk` 依赖（`lib/client.ts`、
+> `getClient()`、`useApi`/`useCloud` flag 都已不存在），本节记录的是当时的中间态。
+
 `@afilmory/sdk` 在模块顶层用 zod 定义了一整套 DTO schema，导入它就把 **zod（约 157 KB 未压缩）**
-一起拖进首屏。这个站是纯静态部署（`config.useApi / useCloud` 都是 false），点赞/评论/trackView
+一起拖进首屏。这个站是纯静态部署（`config.useApi / useCloud` 当时都是 false），点赞/评论/trackView
 全部走 feature-detect 短路，首屏永远用不到。
 
 改成 `getClient()`：第一次真的要发请求时才 `import()`。失败时**清掉缓存的 promise**再抛 ——

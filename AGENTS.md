@@ -46,8 +46,8 @@ apps/web (Vite + React 19 SPA) ←────────┘
 
 - `apps/web/plugins/vite/*` — SPA 的 Vite 插件：`manifest-inject`（外置 manifest + 首屏图片 preload/preconnect）、`site-config-inject`、`photos-static`、`og-image-plugin`（构建期 OG + favicon）、`feed-sitemap`、`locales-json`（点号 key 展开）、`i18n-hmr`、`deps`（分包）、`ast`（`tw` 宏）。
 - `packages/builder/src/plugins/*` — 流水线插件：`storage/{local,s3,b2,github,eagle}`、`thumbnail-storage`、`geocoding`、`github-repo-sync`、`og-image-storage`。
-- **Cloudflare 分享图插件** = `og-image-storage/vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk`。卡片图就是照片本身（1200×630 满幅 WebP，不画底色/站名/标题），文字由平台原生渲染；中间件把 `/photos/:slug` 的 `og:image`/`twitter:image` 改写到 R2 的 `.afilmory/og-images/*.webp`，并按 manifest 注入该照片的 `og:title`/`og:description`/`<title>`/`meta[name=description]`。产物是仓库根 `functions/_middleware.ts`（**构建产物，不提交、已被 ignore**；`pnpm build` 时由 builder 重新生成，改模板后可用 `pnpm og:middleware` 单独重生成，`-- --check` 校验磁盘文件是否最新）。
-- **部署 = Cloudflare Pages 项目 `mgt-afilmory`（生产分支 `main`）**，用仓库里的脚本，别手搓：`pnpm deploy:cloudflare`（构建 + 部署）/ `pnpm deploy:preview`（预览）/ `node scripts/deploy.mjs --skip-build --dry-run`（调试）。脚本必须在**仓库根**执行并以参数传 dist 目录，否则根 `functions/` 不会被打包，OG 改写失效；`apps/web/wrangler.jsonc` 只在 `apps/web` 里部署时生效，别用。中间件缺失时部署脚本会先调用 `pnpm og:middleware` 补生成（依赖 `.env` 里的 `S3_CUSTOM_DOMAIN`）。
+- **Cloudflare 分享图插件** = `og-image-storage/vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk`。卡片图就是照片本身（1200×630 满幅 WebP，不画底色/站名/标题），文字由平台原生渲染；中间件把 `/photos/:slug` 的 `og:image`/`twitter:image` 改写到 R2 的 `.afilmory/og-images/*.webp`，并按 manifest 注入该照片的 `og:title`/`og:description`/`<title>`/`meta[name=description]`；另外把分享弹窗用的 `/og/:photoId` **302** 到同一张 R2 图（运行时 manifest 不保留 `ogImageUrl`，靠这个跳转拿图）。两条路径都必须写在 `apps/web/public/_routes.json` 的 `include` 里，否则请求不进 Functions。产物是仓库根 `functions/_middleware.ts`（**构建产物，不提交、已被 ignore**；`pnpm build` 时由 builder 重新生成，改模板后可用 `pnpm og:middleware` 单独重生成，`-- --check` 校验磁盘文件是否最新，并校验中间件处理的路径（`/photos/*`、`/og/*`）都在 `_routes.json` 的 include 里）。
+- **部署 = Cloudflare Pages 项目 `mgt-afilmory`（生产分支 `main`）**，用仓库里的脚本，别手搓：`pnpm deploy:cloudflare`（构建 + 部署）/ `pnpm deploy:preview`（预览）/ `node scripts/deploy.mjs --skip-build --dry-run`（调试）。脚本必须在**仓库根**执行并以参数传 dist 目录，否则根 `functions/` 不会被打包，OG 改写失效；`apps/web/wrangler.jsonc` 只在 `apps/web` 里部署时生效，别用。中间件缺失**或与模板不一致（`pnpm og:middleware -- --check`）**时部署脚本会先调用 `pnpm og:middleware` 补生成（依赖 `.env` 里的 `S3_CUSTOM_DOMAIN`）。
 - `plugins/eslint/*` — 本地 ESLint 插件（i18n JSON、no-debug、package.json、递归排序）。
 
 ## 本 fork 相对上游的改动（改代码时注意别改回去）
@@ -59,6 +59,11 @@ apps/web (Vite + React 19 SPA) ←────────┘
 - `apps/web/src/modules/gallery/PageFooter.tsx` 的 `@config` 导入是修过的（上游是坏的 `~/../../site.config`）；不要按上游原样 merge 回去。
 - `packages/data` 只导出 `PhotoLoader`（`./manifest` 导出已删除）。
 - 根 `package.json` 只剩静态站相关脚本；`@afilmory/*` 包名保持不变（方便与上游对齐代码）。
+- **社交/会话代码已删除（TECH-90）**：`injectConfig.useApi/useCloud/useNext`、`SessionProvider`、
+  `withCloud`、`@tanstack/react-query`、`modules/social/{comments,Reaction}`、`lib/api/*`、
+  `lib/client.ts`、`lib/tracker.ts` 全部不存在；不要再按上游原样 merge 回来。分享弹窗
+  （`modules/social/ShareModal.tsx`，复制链接/系统分享/下载）保留。`@afilmory/sdk` 包本身还在
+  `packages/sdk`，但 `apps/web` 已不依赖它。
 
 ## 代码规范（沿用上游）
 
