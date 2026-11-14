@@ -14,7 +14,6 @@ import {
 } from '~/icons'
 import { isMobileDevice } from '~/lib/device-viewport'
 import { ImageLoaderManager } from '~/lib/image-loader-manager'
-import { prefetchViewerRouteNow } from '~/lib/prefetch-viewer'
 import { formatExifData } from '~/modules/metadata/formatExifData'
 import type { PhotoManifest } from '~/types/photo'
 
@@ -145,9 +144,6 @@ export const MasonryPhotoItem = memo(({
 
   // Live Photo/Motion Photo hover 处理（仅在桌面端）
   const handleMouseEnter = useCallback(() => {
-    // 用户的鼠标停到某张照片上，就是「可能要看大图」的明确意图 —— 这时候再去取 viewer chunk，
-    // 既不抢首屏缩略图的带宽，又足够早（点开时基本已经下载完）。
-    prefetchViewerRouteNow()
 
     if (isMobileDevice || !hasVideo || !livePhotoVideoLoaded || isPlayingLivePhoto || isConvertingVideo) {
       return
@@ -362,8 +358,3 @@ export const MasonryPhotoItem = memo(({
     </m.div>
   )
 })
-
-
-
-
-
