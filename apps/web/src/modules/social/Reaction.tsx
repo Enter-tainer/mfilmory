@@ -7,7 +7,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { tv } from 'tailwind-variants'
 
-import { client } from '~/lib/client'
+import { getClient } from '~/lib/client'
 
 import { useAnalysis } from '../viewer/hooks/useAnalysis'
 
@@ -81,6 +81,7 @@ export const ReactionRail = ({ className, disabled = false, photoId, style }: Re
   const sendReaction = useCallback(
     async (reaction: (typeof reactions)[number]) => {
       try {
+        const client = await getClient()
         await client.actReaction({
           count: 1,
           refKey: photoId,

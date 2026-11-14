@@ -29,7 +29,7 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| `manifest-inject.ts` | 把 `photos-manifest.json` 内联成 `<script id="manifest">window.__MANIFEST__ = …` |
+| `manifest-inject.ts` | 把 `photos-manifest.json` 外置成内容 hash 命名的 `photos-manifest.<hash>.json`，HTML 里只留 `preload` + URL；同时注入首屏缩略图的 `<link rel="preload" as="image">` 与图片 CDN 的 `preconnect`（`AFILMORY_EMBED_MANIFEST=true` 时退回整份内联成 `<script id="manifest">window.__MANIFEST__ = …`） |
 | `site-config-inject.ts` | 注入 `window.__SITE_CONFIG__`（`site.config.ts` + `config.json`） |
 | `photos-static.ts` | 静态站的照片数据 / 路由辅助 |
 | `og-image-plugin.ts` | 构建期生成站点分享图（一张满幅照片）+ 全部 favicon（`logo.jpg` + `sharp`），并写 og/twitter meta |
@@ -93,14 +93,14 @@ cp config.example.json config.json     # 或手写；pnpm install 也会自动�
 cp builder.config.default.ts builder.config.ts
 # 编辑 .env（S3_BUCKET_NAME / S3_ENDPOINT / S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY / S3_CUSTOM_DOMAIN）
 pnpm build:manifest   # 扫描存储 → 缩略图/blurhash/EXIF → apps/web/src/data/photos-manifest.json
-pnpm build            # 把 manifest 内联进 SPA，产物在 apps/web/dist
+pnpm build            # 把 manifest 外置成 photos-manifest.<hash>.json，产物在 apps/web/dist
 ```
 
 ### 本地缓存（不进仓库）
 
 | 路径 | 作用 |
 | --- | --- |
-| `apps/web/src/data/photos-manifest.json` | 照片清单，由 `build:manifest` 产出、构建时内联进 `index.html` |
+| `apps/web/src/data/photos-manifest.json` | 照片清单源文件，由 `build:manifest` 产出；构建时会被读出、裁掉只对构建期有意义的字段（`digest` / `ogImageUrl`）后外置成 `photos-manifest.<hash>.json` |
 | `apps/web/public/thumbnails/` | 缩略图本地缓存：builder 靠它判断「这照片处理过、可跳过」 |
 
 两者都在 `.gitignore` 里（体积大 / 因站点而异），所以**全新克隆后第一次 `pnpm build` 会把存储里的照片全部处理一遍**（并重新上传缩略图 / OG 图到存储）。日常增量构建只需要保留这两个缓存即可。

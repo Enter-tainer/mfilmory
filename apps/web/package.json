@@ -86,7 +86,6 @@
     "@iconify-json/mingcute": "catalog:",
     "@iconify-json/simple-icons": "1.2.100",
     "@tailwindcss/postcss": "catalog:",
-    "@tailwindcss/typography": "catalog:",
     "@tailwindcss/vite": "4.3.3",
     "@types/geojson": "catalog:",
     "@types/node": "26.6.5",

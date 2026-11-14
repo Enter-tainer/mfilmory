@@ -225,6 +225,13 @@ export const Component = () => {
               <div className="flex items-center gap-6">
                 <div className="flex items-center gap-3">
                   <h1 className="text-xl font-semibold text-zinc-100">Afilmory Manifest</h1>
+                  {/* 这个页面展示的是**运行时真正加载的那份** manifest，不是源文件：
+                      manifestInjectPlugin 会裁掉只对构建期有意义的 `digest` / `ogImageUrl`
+                      （浏览器里没有任何代码读它们）。要和
+                      `apps/web/src/data/photos-manifest.json` 逐字段对比时以源文件为准。 */}
+                  <span className="rounded-md bg-zinc-800/60 px-2 py-0.5 text-[11px] text-zinc-400">
+                    runtime manifest（已裁掉 digest / ogImageUrl）
+                  </span>
                 </div>
 
                 <div className="flex items-center rounded-lg bg-zinc-900/50 p-1">

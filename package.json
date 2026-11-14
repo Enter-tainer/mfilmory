@@ -24,6 +24,10 @@
     "migrate:manifest": "tsx scripts/migrate-manifest.ts",
     "cleanup:assets": "tsx scripts/cleanup-stale-assets.ts",
     "type-check": "pnpm run -r type-check",
+    "perf:bytes": "node scripts/perf/critical-bytes.mjs apps/web/dist",
+    "perf:manifest": "node scripts/perf/assert-manifest-fields.mjs apps/web/src/data/photos-manifest.json apps/web/dist",
+    "perf:fields": "node scripts/perf/probe-manifest-fields.mjs 4812 opt",
+    "perf:serve": "node scripts/perf/spa-server.mjs apps/web/dist 4812",
     "lint": "eslint --fix",
     "format": "prettier --write \"apps/**/*.{ts,tsx,js,jsx,json,css,md}\" \"packages/**/*.{ts,tsx,js,jsx,json,css,md}\""
   },

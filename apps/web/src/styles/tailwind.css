@@ -1,7 +1,32 @@
 @import 'tailwindcss';
-@plugin '@tailwindcss/typography';
+/* 全仓 0 处 `.prose`，但 @tailwindcss/typography 会无条件输出十几 KB 规则。
+   依赖也已从 apps/web/package.json 里摘掉 —— 要用回 prose 得同时把依赖和这一行加回来。 */
 @plugin '@egoist/tailwindcss-icons';
-@plugin 'daisyui';
+/* 这个站从不用 daisyui 的组件类：UI 全部来自 packages/ui（radix + tailwind-variants），
+   只有 daisyui 的 theme 变量（`--color-primary` / `--color-base-100` / `--radius-box` …）
+   和它注入到 `<body>` 的那段 base 样式在被使用。
+   所以 `include:` 里只留 base 层的 6 项，**组件层和 utilities 层整层都不输出**。
+
+   daisyui 的层归属（`node_modules/daisyui/imports.js` 导出 base / components / utilities
+   三个对象，对照过 5.7.50）：
+     base       = rootcolor, svg, rootscrollgutter, properties, scrollbar, rootscrolllock
+     components = button, card, badge, modal, dropdown, menu, navbar, tabs, alert, divider,
+                  loading, tooltip, collapse, steps, range, rating, skeleton, stat, table,
+                  progress, kbd, timeline, avatar, carousel, footer, hero, indicator, mask,
+                  radial-progress, swap, toast, link, input, select, textarea, checkbox,
+                  radio, file-input …
+     utilities  = join, glass, radius, typography
+   `join` / `glass` / `radius` / `typography` 都是 **utilities**（不是 base）：它们只产出
+   `.join*` / `.glass` / `.rounded-box` `-field` `-selector` / `.prose` 这些类，
+   全仓按「类名位置」精确扫描 278 个文件、命中 0 处（`.join` 的 37 处命中全是
+   `Array.prototype.join`，`radius-lg` 是 Tailwind 自己的 `--radius-*` 变量，不是这两个东西）。
+
+   ⚠️ 这个白名单是**手工维护**的：将来真要用 daisyui 的组件类（`btn` / `card` / `modal` …）
+   或上面那四个 utilities，必须先把对应项加回 `include:`，否则样式静默不生效、构建不报错。 */
+@plugin 'daisyui' {
+  include:
+    rootcolor, svg, rootscrollgutter, properties, scrollbar, rootscrolllock;
+}
 @plugin 'tailwind-scrollbar';
 @plugin 'tailwindcss-animate';
 @import 'tailwindcss-safe-area';
