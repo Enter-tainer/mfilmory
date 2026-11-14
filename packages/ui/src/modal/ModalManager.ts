@@ -47,6 +47,17 @@ export const Modal = {
   __unregisterCloser(id: string) {
     modalCloseRegistry.delete(id)
   },
+
+  /**
+   * 是否有全局弹窗正在显示。
+   *
+   * 给「不归 Radix 管、自己挂 document/window 监听」的快捷键用：viewer 的
+   * ArrowLeft/Right/Escape 就属于这种，弹窗打开时必须让位，否则按 Esc 会连
+   * 弹窗和 viewer 一起关掉、按方向键会把背景里的照片换掉。
+   */
+  isOpen(): boolean {
+    return modalStore.get(modalItemsAtom).length > 0
+  },
 }
 
 export { type ModalItem } from './types'

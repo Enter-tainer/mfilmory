@@ -3,7 +3,7 @@ import './PhotoViewer.css'
 import 'swiper/css'
 import 'swiper/css/navigation'
 
-import { ActionButton, Thumbhash } from '@afilmory/ui'
+import { ActionButton, Modal, Thumbhash } from '@afilmory/ui'
 import { Spring } from '@afilmory/utils'
 import type { AnimationFrameRect, MobileViewerDismissSnapshot } from '@afilmory/viewer-motion'
 import {
@@ -342,6 +342,12 @@ export const PhotoViewer = ({
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      // 弹窗（分享 / Raw EXIF / 日期选择）自己处理键盘，viewer 的快捷键让位：
+      // 否则 Esc 会把弹窗和 viewer 一起关掉，方向键会在弹窗打开时换背景照片。
+      if (Modal.isOpen()) {
+        return
+      }
+
       switch (event.key) {
         case 'ArrowLeft': {
           event.preventDefault()

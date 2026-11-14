@@ -10,7 +10,7 @@
  * Usage:
  *   node scripts/deploy.mjs                  # build + deploy to production (branch main)
  *   node scripts/deploy.mjs --preview        # build + deploy as a preview deployment
- *   node scripts/deploy.mjs --skip-build     # deploy the existing apps/web/dist (regenerates the middleware if missing)
+ *   node scripts/deploy.mjs --skip-build     # deploy the existing apps/web/dist (regenerates the middleware when missing or stale)
  *   node scripts/deploy.mjs --dry-run        # print the wrangler command only
  *   node scripts/deploy.mjs --project=foo --branch=bar --dirty
  *
@@ -86,6 +86,37 @@ if (!existsSync(middleware)) {
     }
     if (!existsSync(middleware)) {
       fail(`functions/_middleware.ts is missing and could not be regenerated — ${hint}; make sure .env contains S3_CUSTOM_DOMAIN`)
+    }
+  }
+}
+
+// 存在 ≠ 最新：中间件是模板的构建产物，改了 vendor 模板（比如给分享弹窗加 /og/*
+// 跳转）之后，`--skip-build` 部署会把旧文件原样发上去，且没有任何报错。
+// 用 `og:middleware --check` 比对磁盘文件与「按当前模板/配置重新生成」的结果。
+const middlewareIsFresh = () => {
+  try {
+    execSync('pnpm og:middleware -- --check', { cwd: root, stdio: 'inherit' })
+    return true
+  }
+  catch {
+    return false
+  }
+}
+
+if (existsSync(middleware) && !middlewareIsFresh()) {
+  if (dryRun) {
+    console.warn('⚠ functions/_middleware.ts is stale (dry-run: not regenerating) — run "pnpm og:middleware"')
+  }
+  else if (allowMissingMiddleware) {
+    console.warn('⚠ functions/_middleware.ts is stale — --allow-missing-middleware: deploying it as-is')
+  }
+  else {
+    console.info('• functions/_middleware.ts is stale — regenerating (pnpm og:middleware)…')
+    try {
+      execSync('pnpm og:middleware', { cwd: root, stdio: 'inherit' })
+    }
+    catch {
+      console.warn('⚠ could not regenerate functions/_middleware.ts — deploying the existing (stale) file; make sure .env contains S3_CUSTOM_DOMAIN')
     }
   }
 }

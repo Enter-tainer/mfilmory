@@ -147,7 +147,7 @@ const ShareSheet: ModalComponent<ShareSheetProps> = ({ photo, blobSrc, dismiss }
   const handleDownloadPreview = useCallback(async () => {
     try {
       setIsDownloadingPreview(true)
-      await downloadFile(ogPreviewUrl, `${photo.id}-og.png`)
+      await downloadFile(ogPreviewUrl, `${photo.id}-og.webp`)
       toast.success(t('photo.share.downloadPreview'))
     }
     catch {

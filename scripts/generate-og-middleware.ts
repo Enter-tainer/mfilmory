@@ -81,11 +81,34 @@ async function generateInto(repoRoot: string): Promise<string> {
   return readFileSync(path.join(repoRoot, 'functions', '_middleware.ts'), 'utf8')
 }
 
+/**
+ * 中间件里分支处理的每个路径前缀，都必须写进 `apps/web/public/_routes.json` 的
+ * `include`，否则 Cloudflare Pages 不会把那个路径交给 Functions —— 请求会落到
+ * 静态资源 / SPA 回退上。分享预览图 `/og/*` 就这么坏过一版：中间件分支写好了，
+ * 但 `_routes.json` 只 include 了 `/photos/*`，于是 `<img>` 拿到 200 text/html，
+ * 图片永远破图，而且没有任何构建/部署报错。
+ */
+function assertRoutesCoverage(source: string) {
+  const routesPath = path.join(root, 'apps/web/public/_routes.json')
+  const routes = JSON.parse(readFileSync(routesPath, 'utf8')) as { include?: string[] }
+  const include = routes.include ?? []
+  const handled = ['/photos/', '/og/'].filter(prefix => source.includes(`startsWith('${prefix}')`))
+  const missing = handled.filter(prefix => !include.includes(`${prefix}*`))
+  if (missing.length > 0) {
+    console.error(
+      `✗ middleware handles ${missing.map(p => `"${p}*"`).join(', ')} but _routes.json include is ${JSON.stringify(include)}`
+      + ` — add ${missing.map(p => `"${p}*"`).join(', ')} to apps/web/public/_routes.json`,
+    )
+    process.exit(1)
+  }
+}
+
 if (checkOnly) {
   const tmp = mkdtempSync(path.join(tmpdir(), 'mfilmory-og-'))
   try {
     copyFileSync(path.join(root, 'config.json'), path.join(tmp, 'config.json'))
     const generated = await generateInto(tmp)
+    assertRoutesCoverage(generated)
     const current = existsSync(target) ? readFileSync(target, 'utf8') : ''
     rmSync(tmp, { recursive: true, force: true })
     if (generated === current) {
@@ -104,6 +127,7 @@ if (checkOnly) {
 const before = existsSync(target) ? readFileSync(target, 'utf8') : ''
 mkdirSync(path.join(root, 'functions'), { recursive: true })
 const after = await generateInto(root)
+assertRoutesCoverage(after)
 
 console.info(
   after === before

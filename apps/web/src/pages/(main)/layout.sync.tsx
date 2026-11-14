@@ -1,4 +1,4 @@
-import { ScrollArea, ScrollElementContext } from '@afilmory/ui'
+import { Modal, ScrollArea, ScrollElementContext } from '@afilmory/ui'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { useEffect, useRef } from 'react'
 import { Outlet, useLocation, useParams, useSearchParams } from 'react-router'
@@ -299,6 +299,12 @@ const useSyncViewerCloseShortcut = () => {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') {
+        return
+      }
+
+      // 弹窗（分享 / Raw EXIF / 日期选择）打开时 Esc 属于弹窗：它自己会关，
+      // 别再顺手把 viewer 也关掉。
+      if (Modal.isOpen()) {
         return
       }
 
