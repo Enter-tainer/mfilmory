@@ -1,6 +1,6 @@
 import { photoLoader } from '@afilmory/data'
 import { useAtomValue } from 'jotai'
-import { use, useCallback, useEffect, useMemo, useState } from 'react'
+import { use, useCallback, useMemo } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router'
 
 import type { DateRangeFilter } from '~/atoms/app'
@@ -136,21 +136,7 @@ export const getFilteredPhotos = () => {
   )
 }
 
-/**
- * detail（完整 exif / location 等）是后到的，合并时 photoLoader 会**换掉对象**。
- * 这里订阅一次「已合并」事件触发重算，否则依赖对象引用的 useMemo 会一直拿到旧值，
- * ExifPanel 会永远显示缺字段。
- */
-const useDetailVersion = () => {
-  const [version, setVersion] = useState(0)
-
-  useEffect(() => photoLoader.subscribeDetails(() => setVersion(v => v + 1)), [])
-
-  return version
-}
-
 export const usePhotos = () => {
-  const detailVersion = useDetailVersion()
   const {
     sortOrder,
     selectedTags,
@@ -162,10 +148,6 @@ export const usePhotos = () => {
   } = useAtomValue(gallerySettingAtom)
 
   const masonryItems = useMemo(() => {
-    // detail 合并后 photoLoader 会换掉照片对象，这个版本号就是重算的信号；
-    // 值本身用不到，但必须被引用，否则 eslint 会把它当成多余依赖。
-    void detailVersion
-
     return filterAndSortPhotos(
       photoLoader.getPhotos(),
       selectedTags,
@@ -176,7 +158,7 @@ export const usePhotos = () => {
       sortOrder,
       tagFilterMode,
     )
-  }, [detailVersion, sortOrder, selectedTags, selectedCameras, selectedLenses, selectedRatings, selectedDateRange, tagFilterMode])
+  }, [sortOrder, selectedTags, selectedCameras, selectedLenses, selectedRatings, selectedDateRange, tagFilterMode])
 
   return masonryItems
 }

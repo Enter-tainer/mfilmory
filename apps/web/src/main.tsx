@@ -45,7 +45,7 @@ void bootstrap()
 
 async function bootstrap() {
   const manifest = await resolveManifest()
-  photoLoader.init(manifest, { detailUrl: window.__MANIFEST_DETAIL_URL__ })
+  photoLoader.init(manifest)
 
   createRoot(document.querySelector('#root')!).render(
     <Suspense fallback={<AppSkeleton />}>

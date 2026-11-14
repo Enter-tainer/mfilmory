@@ -13,11 +13,12 @@ const MANIFEST_FILE_BASENAME = 'photos-manifest'
 /**
  * 首屏（网格第一行）至少有 4-8 张缩略图，但它们的 URL 只存在于 manifest 里 ——
  * 也就是说浏览器要等 HTML → manifest → JS 执行 → React 渲染之后才发起图片请求。
- * 把前几张的 URL 直接写进 HTML 的 preload，图片就能和 manifest/JS 并行下载，
- * 实测 LCP 从 ~3.3 s 降到 ~2.4 s。
+ * 把前几张的 URL 直接写进 HTML 的 preload，图片就能和 manifest/JS 并行下载。
  *
  * 代价：非 `/` 的落地页（比如 `/map`）用不上这几张，会白下载几十 KB，
  * 所以数量取小一点，只覆盖「第一行最可能出现在 LCP 里的那几张」。
+ *
+ * 必须和 `MasonryPhotoItem.tsx` 里的 `EAGER_IMAGE_COUNT` 保持一致。
  */
 const PRELOADED_THUMBNAIL_COUNT = 4
 
@@ -40,13 +41,58 @@ function resolveMode(command: 'serve' | 'build'): ManifestMode {
   return command === 'serve' ? 'inline' : 'external'
 }
 
-type ManifestPhoto = {
-  thumbnailUrl?: string | null
-  lastModified?: string
+type RawPhoto = Record<string, unknown> & {
+  thumbnailUrl?: unknown
+  lastModified?: unknown
   exif?: { DateTimeOriginal?: unknown } | null
 }
 
+/**
+ * 构建期才有意义、运行时永远不读的字段。
+ *
+ * - `digest`：内容 sha256 前缀，64 位随机 hex，**几乎不可压缩** —— 单它一项就占
+ *   整份 manifest brotli 后 64.3 KB 里的 13.4 KB（21%）。运行时没有任何代码读它，
+ *   只有流水线自己用它做去重/命名；源文件 `apps/web/src/data/photos-manifest.json`
+ *   里仍然保留，`scripts/cleanup-stale-assets.ts` 和 OG 中间件读的是源文件。
+ * - `ogImageUrl`：只有构建期的 Cloudflare 中间件用。
+ *
+ * **不要往这个列表里加运行时字段**：首屏网格/列表/筛选/地图/大图 EXIF 面板读到的
+ * 每一个字段都必须留着，裁剪掉任何一个都是静默功能回归（`location` 会被列表视图的
+ * 位置行和 Cmd-K 的地点搜索读，完整 `exif` 会被 hover 卡、筛选和 EXIF 面板读）。
+ */
+const FIELDS_UNUSED_BY_WEB = ['digest', 'ogImageUrl'] as const
+
 const escapeAttribute = (value: string) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;')
+
+function parsePhotos(manifestRaw: string): RawPhoto[] | null {
+  try {
+    const parsed = JSON.parse(manifestRaw) as { data?: RawPhoto[] }
+    return Array.isArray(parsed.data) ? parsed.data : null
+  }
+  catch {
+    return null
+  }
+}
+
+/** 裁掉只对构建期有意义的字段。返回新字符串，不改动入参。 */
+function stripBuildOnlyFields(manifestRaw: string): string {
+  try {
+    const parsed = JSON.parse(manifestRaw) as { data?: RawPhoto[] }
+    if (!Array.isArray(parsed.data)) {
+      return JSON.stringify(parsed)
+    }
+    for (const photo of parsed.data) {
+      for (const field of FIELDS_UNUSED_BY_WEB) {
+        delete photo[field]
+      }
+    }
+    return JSON.stringify(parsed)
+  }
+  catch (error) {
+    console.warn('[manifest-inject] failed to strip build-only fields:', error)
+    return manifestRaw
+  }
+}
 
 /**
  * 图片 CDN 与站点不同源（R2 自定义域名），首次连接要额外付 DNS + TCP + TLS。
@@ -54,17 +100,9 @@ const escapeAttribute = (value: string) => value.replaceAll('&', '&amp;').replac
  * 注意不要加 `crossorigin`：`<img>` 没有 crossorigin 属性，属于 no-cors 请求，
  * 加了 crossorigin 反而会建立一条用不上的 CORS 连接。
  */
-function buildImageOriginPreconnect(manifestRaw: string): string {
-  let photos: ManifestPhoto[]
-  try {
-    photos = (JSON.parse(manifestRaw) as { data?: ManifestPhoto[] }).data ?? []
-  }
-  catch {
-    return ''
-  }
-
+function buildImageOriginPreconnect(photos: RawPhoto[]): string {
   const thumbnailUrl = photos.find(photo => typeof photo.thumbnailUrl === 'string')?.thumbnailUrl
-  if (!thumbnailUrl) {
+  if (typeof thumbnailUrl !== 'string') {
     return ''
   }
 
@@ -79,43 +117,34 @@ function buildImageOriginPreconnect(manifestRaw: string): string {
 
 /**
  * 取默认排序（拍摄时间倒序，与 `usePhotoViewer.filterAndSortPhotos` 一致）的前 N 张，
- * 生成 `<link rel="preload" as="image">`。拿不到 manifest 时静默退化成不 preload。
+ * 生成 `<link rel="preload" as="image">`。
+ *
+ * 先 filter 再 slice：否则前 4 张里只要有一张没有缩略图，preload 数量就会少于 N，
+ * 而又没有任何报错。
  */
-function buildThumbnailPreloads(manifestRaw: string): string {
-  let photos: ManifestPhoto[]
-  try {
-    photos = (JSON.parse(manifestRaw) as { data?: ManifestPhoto[] }).data ?? []
-  }
-  catch {
-    return ''
-  }
-
-  const dateKey = (photo: ManifestPhoto) => {
+function buildThumbnailPreloads(photos: RawPhoto[]): string {
+  const dateKey = (photo: RawPhoto) => {
     const original = photo.exif?.DateTimeOriginal
-    return typeof original === 'string' && original.length > 0 ? original : (photo.lastModified ?? '')
+    if (typeof original === 'string' && original.length > 0) {
+      return original
+    }
+    return typeof photo.lastModified === 'string' ? photo.lastModified : ''
   }
 
   return photos
+    .filter((photo): photo is RawPhoto & { thumbnailUrl: string } => typeof photo.thumbnailUrl === 'string' && photo.thumbnailUrl.length > 0)
     .map(photo => ({ photo, key: dateKey(photo) }))
     .sort((a, b) => b.key.localeCompare(a.key))
     .slice(0, PRELOADED_THUMBNAIL_COUNT)
-    .map(({ photo }) => photo.thumbnailUrl)
-    .filter((url): url is string => typeof url === 'string' && url.length > 0)
-    .map(url => `<link rel="preload" as="image" fetchpriority="high" href="${escapeAttribute(url)}">`)
+    .map(({ photo }) => `<link rel="preload" as="image" fetchpriority="high" href="${escapeAttribute(photo.thumbnailUrl)}">`)
     .join('')
 }
 
 export function manifestInjectPlugin(): Plugin {
   let mode: ManifestMode = 'inline'
-  let indexManifestJson = '{}'
-  let detailManifestJson = '{}'
-  let fullManifestJson = '{}'
-  /** 形如 /photos-manifest.index.1a2b3c4d.json（首屏用） */
+  let manifestJson = '{}'
+  /** 形如 /photos-manifest.1a2b3c4d.json */
   let publicPath = ''
-  /** 形如 /photos-manifest.detail.1a2b3c4d.json（viewer 打开时才取） */
-  let detailPublicPath = ''
-  /** 形如 /photos-manifest.full.1a2b3c4d.json（/manifest 调试页用） */
-  let fullPublicPath = ''
   let outDir = ''
 
   function readManifest(): { text: string, json: string } {
@@ -130,115 +159,15 @@ export function manifestInjectPlugin(): Plugin {
     }
   }
 
-  /**
-   * 首屏只下发网格/筛选/排序/地图标记真的会读的字段。
-   *
-   * - 永不读：`digest`（64 位随机 hex，几乎不可压缩）、`ogImageUrl`（只有构建期的
-   *   Cloudflare 中间件用，它直接读源文件）
-   * - 只有打开大图才读：完整 `exif`、`location`、`toneAnalysis`、`keywords`、`regions`、`s3Key`
-   *
-   * 后者进 `photos-manifest.detail.<hash>.json`，按 id 索引，viewer 打开时才取。
-   */
-  const FIELDS_UNUSED_BY_WEB = ['digest', 'ogImageUrl'] as const
-
-  /** 网格 hover 卡、列表视图、筛选、地图标记要用到的 exif 字段 */
-  const EXIF_FIELDS_FOR_INDEX = [
-    'Make',
-    'Model',
-    'LensMake',
-    'LensModel',
-    'Rating',
-    'FocalLength',
-    'FocalLengthIn35mmFormat',
-    'FNumber',
-    'Aperture',
-    'ShutterSpeed',
-    'ExposureTime',
-    'ISO',
-    'DateTimeOriginal',
-    'Orientation',
-    'GPSLatitude',
-    'GPSLongitude',
-    'GPSLatitudeRef',
-    'GPSLongitudeRef',
-  ] as const
-
-  type RawPhoto = Record<string, unknown>
-
-  function splitManifest(manifestRaw: string): { index: string, detail: string, full: string } {
-    try {
-      const parsed = JSON.parse(manifestRaw) as { data?: RawPhoto[] }
-      const full = JSON.stringify(parsed)
-      if (!Array.isArray(parsed.data)) {
-        return { index: full, detail: '{}', full }
-      }
-
-      const detail: Record<string, RawPhoto> = {}
-      for (const photo of parsed.data) {
-        const id = String(photo.id)
-        const patch: RawPhoto = {}
-
-        if (photo.exif && typeof photo.exif === 'object') {
-          const indexExif: RawPhoto = {}
-          const restExif: RawPhoto = {}
-          for (const [key, value] of Object.entries(photo.exif)) {
-            if ((EXIF_FIELDS_FOR_INDEX as readonly string[]).includes(key)) {
-              indexExif[key] = value
-            }
-            else {
-              restExif[key] = value
-            }
-          }
-          photo.exif = indexExif
-          if (Object.keys(restExif).length > 0) {
-            patch.exif = restExif
-          }
-        }
-
-        for (const field of ['location', 'toneAnalysis', 'keywords', 'regions', 's3Key'] as const) {
-          if (photo[field] !== undefined && photo[field] !== null) {
-            patch[field] = photo[field]
-          }
-          delete photo[field]
-        }
-
-        for (const field of FIELDS_UNUSED_BY_WEB) {
-          delete photo[field]
-        }
-
-        if (Object.keys(patch).length > 0) {
-          detail[id] = patch
-        }
-      }
-
-      return { index: JSON.stringify(parsed), detail: JSON.stringify(detail), full }
-    }
-    catch (error) {
-      console.warn('Failed to split manifest:', error)
-      return { index: '{}', detail: '{}', full: '{}' }
-    }
-  }
-
   /** 外置模式下计算产物路径（保持 buildStart / dev server 两条路径一致） */
   function ensurePublicPath(): string {
     if (publicPath) {
       return publicPath
     }
     const { json } = readManifest()
-    const { index, detail, full } = splitManifest(json)
-    indexManifestJson = index
-    detailManifestJson = detail
-    fullManifestJson = full
-    // hash 覆盖三份内容，部署后任一变化都会换 URL
-    const hash = createHash('sha256')
-      .update(index)
-      .update(detail)
-      .update(full)
-      .digest('hex')
-      .slice(0, 8)
-    publicPath = `/${MANIFEST_FILE_BASENAME}.index.${hash}.json`
-    detailPublicPath = `/${MANIFEST_FILE_BASENAME}.detail.${hash}.json`
-    fullPublicPath = `/${MANIFEST_FILE_BASENAME}.full.${hash}.json`
+    manifestJson = stripBuildOnlyFields(json)
+    const hash = createHash('sha256').update(manifestJson).digest('hex').slice(0, 8)
+    publicPath = `/${MANIFEST_FILE_BASENAME}.${hash}.json`
     return publicPath
   }
 
@@ -263,10 +192,7 @@ export function manifestInjectPlugin(): Plugin {
       }
       const dir = options.dir ? path.resolve(options.dir) : outDir
       mkdirSync(dir, { recursive: true })
-      writeFileSync(path.join(dir, path.basename(publicPath)), indexManifestJson)
-      // detail 只在打开大图时取；full 只给 /manifest 调试页 —— 两者都不进首屏
-      writeFileSync(path.join(dir, path.basename(detailPublicPath)), detailManifestJson)
-      writeFileSync(path.join(dir, path.basename(fullPublicPath)), fullManifestJson)
+      writeFileSync(path.join(dir, path.basename(publicPath)), manifestJson)
     },
 
     configureServer(server) {
@@ -300,13 +226,14 @@ export function manifestInjectPlugin(): Plugin {
 
       // 外置：HTML 里只留 URL + 一条 preload，让 JSON 和 HTML/CSS/JS 并行下载
       const url = ensurePublicPath()
+      const photos = parsePhotos(manifestJson) ?? []
       const tags = [
         // 图片 CDN 是另一个源，先把连接搭起来
-        buildImageOriginPreconnect(indexManifestJson),
+        buildImageOriginPreconnect(photos),
         // 首屏缩略图先于 manifest/JS 开始下载（LCP 主要靠这条）
-        buildThumbnailPreloads(indexManifestJson),
+        buildThumbnailPreloads(photos),
         `<link rel="preload" href="${url}" as="fetch" crossorigin="anonymous">`,
-        `<script id="manifest">window.__MANIFEST__=null;window.__MANIFEST_URL__=${JSON.stringify(url)};window.__MANIFEST_DETAIL_URL__=${JSON.stringify(detailPublicPath)};window.__MANIFEST_FULL_URL__=${JSON.stringify(fullPublicPath)}</script>`,
+        `<script id="manifest">window.__MANIFEST__=null;window.__MANIFEST_URL__=${JSON.stringify(url)}</script>`,
       ].join('')
 
       return html.replace(MANIFEST_PLACEHOLDER, tags)

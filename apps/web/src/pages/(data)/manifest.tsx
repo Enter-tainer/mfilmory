@@ -1,8 +1,6 @@
 import { photoLoader } from '@afilmory/data'
 import { Button, ScrollArea } from '@afilmory/ui'
-import { useEffect, useMemo, useState } from 'react'
-
-import type { PhotoManifest } from '~/types/photo'
+import { useMemo, useState } from 'react'
 
 // JSON 语法高亮组件
 const JsonHighlight = ({ data }: { data: any }) => {
@@ -178,36 +176,7 @@ export const Component = () => {
   const [searchTerm, setSearchTerm] = useState('')
   const [viewMode, setViewMode] = useState<'stats' | 'raw'>('stats')
 
-  // 首屏下发的是裁剪版 manifest（没有 digest / ogImageUrl）。调试页要完整数据，
-  // 所以按需再取一次完整版；拿不到就退回裁剪版，并在标题旁标注。
-  const [fullPhotos, setFullPhotos] = useState<PhotoManifest[] | null>(null)
-  const [fullLoadFailed, setFullLoadFailed] = useState(false)
-
-  useEffect(() => {
-    const fullUrl = window.__MANIFEST_FULL_URL__
-    if (!fullUrl) {
-      return
-    }
-    let cancelled = false
-    fetch(fullUrl, { credentials: 'omit' })
-      .then(response => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
-      .then((payload: { data?: PhotoManifest[] }) => {
-        if (!cancelled) {
-          setFullPhotos(payload.data ?? [])
-        }
-      })
-      .catch((error) => {
-        console.error('[manifest] failed to load the full manifest, showing the pruned one:', error)
-        if (!cancelled) {
-          setFullLoadFailed(true)
-        }
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  const photos = fullPhotos ?? photoLoader.getPhotos()
+  const photos = photoLoader.getPhotos()
   const manifestData = {
     version: 'v6',
     data: photos,
@@ -256,11 +225,13 @@ export const Component = () => {
               <div className="flex items-center gap-6">
                 <div className="flex items-center gap-3">
                   <h1 className="text-xl font-semibold text-zinc-100">Afilmory Manifest</h1>
-                  {fullLoadFailed && (
-                    <span className="rounded-md bg-amber-500/15 px-2 py-0.5 text-[11px] text-amber-300">
-                      完整 manifest 加载失败，正在显示裁剪版（缺 digest / ogImageUrl）
-                    </span>
-                  )}
+                  {/* 这个页面展示的是**运行时真正加载的那份** manifest，不是源文件：
+                      manifestInjectPlugin 会裁掉只对构建期有意义的 `digest` / `ogImageUrl`
+                      （浏览器里没有任何代码读它们）。要和
+                      `apps/web/src/data/photos-manifest.json` 逐字段对比时以源文件为准。 */}
+                  <span className="rounded-md bg-zinc-800/60 px-2 py-0.5 text-[11px] text-zinc-400">
+                    runtime manifest（已裁掉 digest / ogImageUrl）
+                  </span>
                 </div>
 
                 <div className="flex items-center rounded-lg bg-zinc-900/50 p-1">
@@ -371,4 +342,3 @@ export const Component = () => {
     </div>
   )
 }
-

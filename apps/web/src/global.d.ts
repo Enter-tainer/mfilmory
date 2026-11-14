@@ -34,10 +34,6 @@ declare global {
     __SITE_CONFIG__?: Partial<SiteConfig>
     /** 构建期注入：外置 manifest 的 URL（内联模式下为 undefined） */
     __MANIFEST_URL__?: string
-    /** 构建期注入：detail（完整 exif / location 等）的 URL，viewer 打开时才取 */
-    __MANIFEST_DETAIL_URL__?: string
-    /** 构建期注入：完整 manifest 的 URL，只给 /manifest 调试页用 */
-    __MANIFEST_FULL_URL__?: string
     /** 内联模式下的 manifest；外置模式启动时由 main.tsx 填入 */
     __MANIFEST__?: AfilmoryManifest | null
   }

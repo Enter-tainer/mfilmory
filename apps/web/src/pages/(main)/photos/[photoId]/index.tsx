@@ -1,4 +1,3 @@
-import { photoLoader } from '@afilmory/data'
 import { RootPortal, RootPortalProvider } from '@afilmory/ui'
 import clsx from 'clsx'
 import { useAtomValue } from 'jotai'
@@ -27,11 +26,6 @@ export const Component = () => {
     [ref],
   )
   useTitle(photos[photoViewer.currentIndex]?.title || 'Not Found')
-
-  // 深链/直接打开大图时不会经过 hover 预取，这里直接触发（幂等）
-  useEffect(() => {
-    void photoLoader.loadDetails()
-  }, [])
 
   const [accentColor, setAccentColor] = useState<string | null>(null)
 
