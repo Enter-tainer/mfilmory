@@ -346,4 +346,3 @@ export type { OgImagePluginOptions, OgVendorConfig }
 
 export { type CloudflareMiddlewareVendorConfig } from './vendors/cloudflare-moddleware.js'
 export { type OgVendorKind } from './vendors/types.js'
-

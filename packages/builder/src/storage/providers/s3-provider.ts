@@ -438,8 +438,21 @@ export class S3StorageProvider implements StorageProvider {
       }
     }
 
+    // CopyObject 默认沿用源对象的元数据（MetadataDirective: COPY），所以这里传的
+    // content-type / cache-control 不显式 REPLACE 就是空操作。两个都没传时保持原行为。
+    const moveHeaders: Record<string, string> = {}
+    if (options?.contentType) {
+      moveHeaders['content-type'] = options.contentType
+    }
+    if (options?.cacheControl) {
+      moveHeaders['cache-control'] = options.cacheControl
+    }
+    if (Object.keys(moveHeaders).length > 0) {
+      moveHeaders['x-amz-metadata-directive'] = 'REPLACE'
+    }
+
     const { metadata } = await this.client.moveObject(sourceKey, targetKey, {
-      headers: options?.contentType ? { 'content-type': options.contentType } : undefined,
+      headers: Object.keys(moveHeaders).length > 0 ? moveHeaders : undefined,
     })
     return {
       key: metadata.key,
@@ -453,4 +466,3 @@ export class S3StorageProvider implements StorageProvider {
     return prefix.replaceAll('\\', '/').replaceAll(/^\/+|\/+$/g, '')
   }
 }
-

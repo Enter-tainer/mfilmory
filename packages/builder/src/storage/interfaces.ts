@@ -293,4 +293,3 @@ export type ManagedStorageConfig = {
 export type StorageConfig = RemoteStorageConfig | LocalStorageConfig | ManagedStorageConfig | CustomStorageConfig
 
 export type StorageProviderCategory = 'remote' | 'local'
-

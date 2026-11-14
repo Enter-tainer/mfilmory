@@ -119,10 +119,12 @@ pnpm build            # 把 manifest 内联进 SPA，产物在 apps/web/dist
 - 换格式要全量重生成：`pnpm build:manifest -- --force-thumbnails`。残留的旧格式文件由 `handleDeletedPhotos` 清理——只在新格式文件已存在时才删，避免 `--force-manifest`（不重生成缩略图）把唯一副本删掉。
 - 远端存储里的旧格式对象**不会**自动删（`thumbnail-storage` 把自己的前缀排除在扫描外）：用 `pnpm cleanup:assets` 统计，`-- --delete` 清缩略图，其他目录加 `--directory=.afilmory/og-images --keep=webp`。**先确认线上 manifest 已经不引用旧格式再删**。
 - 缩略图 / 占位图 / OG 卡上传时会带 `Cache-Control: public, max-age=86400, stale-while-revalidate=604800`
-  （`packages/builder/src/plugins/thumbnail-storage/shared.ts` 的 `MEDIA_CACHE_CONTROL`）。这些产物的文件名固定、
-  照片重处理时原地覆盖，所以不能 `immutable`；但完全不带头时浏览器只能用启发式缓存（≈10% 文件年龄），
-  新上传的照片几乎每次都要重下。**这个头只对之后上传的对象生效**——存量的 R2 对象要生效得重传，
-  全量重建用 `pnpm build:manifest -- --force`（会重新编码 369 张，慢）。- 分享图不走 Satori/resvg，直接用 sharp 从 2560px 的占位图（preview）缩放出 1200×630 WebP：源图够大、不用再解码重编码成 PNG，也不依赖构建机装中文字体。
+  （`packages/builder/src/plugins/thumbnail-storage/shared.ts` 的 `MEDIA_CACHE_CONTROL`）。
+  这些产物的文件名固定、照片重处理时原地覆盖，所以不能 `immutable`；但完全不带头时浏览器只能用
+  启发式缓存（≈10% 文件年龄），新上传的照片几乎每次都要重下。
+  **仅对 S3 兼容 provider（s3 / oss / cos）生效**：`b2`、`github`、`local` 三个 provider 会丢弃这个选项。
+  **也只对之后上传的对象生效**——存量对象要生效必须重传。
+- 分享图不走 Satori/resvg，直接用 sharp 从 2560px 的占位图（preview）缩放出 1200×630 WebP：源图够大、不用再解码重编码成 PNG，也不依赖构建机装中文字体。
 - 原图与产物都有缓存：下载过的原图存在 `apps/web/src/data/.cache/originals/`，每张照片每种产物用哪组参数编码记录在 `.cache/asset-signatures.json`。只改一档参数时其他档不会重算。`MFILMORY_NO_ORIGINAL_CACHE=1` 跳过原图缓存，`MFILMORY_FORCE_ENCODE=1` 强制重编码。
 
 #### AVIF 作为**输入**（照片本身就是 .avif）
