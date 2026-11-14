@@ -25,6 +25,8 @@ pnpm lint                 # eslint --fix
 
 注意：`apps/web/src/generated-routes.ts` 由 `vite-plugin-route-builder` 在首次构建时生成（已 gitignore）。全新 clone 后先 `pnpm build` 再 `pnpm type-check`，否则 `type-check` 会因为找不到生成文件而报错——上游 CI 也是这个顺序。
 
+构建性能：`system.processing.sharpConcurrency` 控制每个 sharp 操作内部用几个 libvips 线程；`UV_THREADPOOL_SIZE`（必须在进程启动前设置的 env，默认 4）控制同时有多少个 sharp 操作。批量构建两者要一起调，把 UV 写进 `builder.config.ts` / `.env` 不会生效。
+
 ## 架构（现存部分）
 
 ```

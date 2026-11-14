@@ -27,6 +27,13 @@ export interface SystemProcessingSettings {
   supportedFormats?: Set<string>
   digestSuffixLength?: number
   /**
+   * 每个 sharp 操作内部使用的 libvips 线程数（`sharp.concurrency()`）。
+   * - `1`（默认）：单线程处理一张图，适合大量图片并行的场景
+   * - `2`–`4`：单张图更快，但会放大 CPU 占用；建议同时把
+   *   `UV_THREADPOOL_SIZE` 调到与并发任务数相当（必须在进程启动前设置）
+   */
+  sharpConcurrency?: number
+  /**
    * Do not process input images where the number of pixels (width x height) exceeds this limit.
    * - `number`: An integral Number of pixels as the limit
    * - `false` or `0`: Remove limit entirely

@@ -2,6 +2,7 @@ import path from 'node:path'
 import process from 'node:process'
 
 import type { AfilmoryManifest, CameraInfo, LensInfo, PhotoManifestItem, ProcessPhotoResult } from '@afilmory/typing'
+import sharp from 'sharp'
 
 import { thumbnailExists } from '../image/thumbnail.js'
 import { logger } from '../logger/index.js'
@@ -74,6 +75,13 @@ export class AfilmoryBuilder {
 
   constructor(config: BuilderConfig) {
     this.config = config
+
+    const sharpConcurrency = config.system.processing.sharpConcurrency
+    if (typeof sharpConcurrency === 'number' && sharpConcurrency > 0) {
+      // libvips is process-global; set it before any photo is processed. This also
+      // runs inside cluster workers because each worker constructs its own builder.
+      sharp.concurrency(Math.max(1, Math.floor(sharpConcurrency)))
+    }
 
     this.pluginReferences = this.resolvePluginReferences()
 
