@@ -74,12 +74,20 @@ type BundleLike = Record<string, OutputFileLike>
  * 它在 `generateBundle`（晚于所有 `transformIndexHtml`）把内联后的整份 CSS 再丢给
  * clean-css 重压一遍，而 clean-css 5.3.3 不认识 `@scope`，会把 DaisyUI `join` 那一整块
  * 静默删掉 —— 于是「产物里的 CSS」和「浏览器实际拿到的 CSS」不是同一份。
+ *
+ * `INLINE_MAIN_CSS=0` 时整个优化关闭（保留 `<link rel="stylesheet">`）。
+ * 用途是**差分验证**：拿关掉后的产物当参照，断言「内联进 HTML 的 CSS」与「Vite 本来会
+ * 发出的那份 CSS」逐字节一致 —— 这比写死 `@scope` 计数可靠得多。写死计数的问题是：
+ * 另一个 PR 完全可能合法地把那段 CSS 从产物里去掉（例如把某个 DaisyUI utility 移出
+ * `include:` 白名单后 `@scope` 自然就没了），这时断言会误报成「clean-css 吃掉了规则」。
  */
 export function inlineMainCssPlugin(): Plugin {
   /** 本次构建里被内联掉的产物文件名，供 writeBundle 断言使用 */
   const inlinedFileNames = new Set<string>()
   let outDir = ''
   let base = '/'
+  /** `INLINE_MAIN_CSS=0` 用来生成「不内联」的参照产物，供差分断言使用 */
+  const enabled = process.env.INLINE_MAIN_CSS !== '0'
 
   return {
     name: 'afilmory:inline-main-css',
@@ -94,6 +102,11 @@ export function inlineMainCssPlugin(): Plugin {
       // 必须晚于 `vite:build-html`（它才负责把 <link rel=stylesheet> 注入 HTML）
       order: 'post',
       handler(html, ctx) {
+        if (!enabled) {
+          // `INLINE_MAIN_CSS=0`：完全不动产物，用来生成「不内联」的参照构建
+          return html
+        }
+
         const bundle = ctx.bundle
         if (!bundle) {
           // build 阶段 transformIndexHtml 一定带 bundle；真没有就说明 Vite 行为变了，
