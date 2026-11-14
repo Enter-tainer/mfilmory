@@ -175,6 +175,32 @@ LCP 那张要等所有请求各分到一勺。现在前 `EAGER_IMAGE_COUNT = 4` 
 
 原始字节合计：2 543 781 → 2 198 807 B（−13.6%）。
 
+## 和其它 perf PR 一起合入后的实测
+
+这一轮同时有 5 个 perf PR（manifest 裁剪 / 网格 overscan / 主 CSS 内联 / `_routes.json` /
+上传 Cache-Control）。把 5 个**全部合到一个分支**上构建后实测，基准是 main：
+
+| 组成 | main | 5 个合并 | Δ |
+|---|---:|---:|---:|
+| HTML + 内联 CSS | 1 905 B | 28 147 B | +26 242 |
+| 外链 CSS | 42 238 B | 0 B | −42 238 |
+| 入口 JS（含 modulepreload） | 321 008 B | 301 130 B | −19 878 |
+| manifest | 64 308 B | 49 654 B | −14 654 |
+| **关键路径合计（br11）** | **429 459 B** | **378 931 B** | **−11.77%** |
+
+（CSS 那一栏要连着看：外链的 42 238 B 全部变成 HTML 里的内联 26 648 B，
+净效果是 CSS 相关字节 44 143 → 28 147，即 −36%。）
+
+**跨 PR 交互发现并修掉了一个单看任何一个 PR 都发现不了的构建失败**：
+主 CSS 内联插件 `import type { OutputBundle } from 'vite'`，而 Vite 8 并没有导出这个类型
+（它从 `rolldown` 局部 import）。因为 `apps/web/tsconfig.json` 的 `include` 里没有 `plugins/`，
+这个错误一直是隐形的；只有和「把 plugins 纳入 type-check」的改动同时存在时，
+`vite-plugin-checker` 才把它变成 `vite build` 失败。已在该 PR 里改成本地结构化类型。
+
+合并后的完整验收（base 选「只含网格 overscan 那一个改动」的构建，这样才隔离出其它 PR 的影响）：
+5 条路由硬性判据全通过、`probe-manifest-fields.mjs` 5/5 通过、manifest 逐字段断言通过、
+主 CSS 内联内容与参照产物逐字节一致、`vite build` 与 `pnpm type-check` 均 exit 0。
+
 ## 代价：preload 的 4 张只在 `/` 和 `/photos/:id` 上被复用
 
 静态 HTML 无法按路径区分，所以非默认排序的落地页会白下载这几张。实测
