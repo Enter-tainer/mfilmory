@@ -161,6 +161,15 @@ pnpm build            # 把 manifest 外置成 photos-manifest.<hash>.json，产
 - **JPEG XL 不支持**（上游 issue #250 的另一半仍未做）。
 - 多帧 / 动画 AVIF 没有处理，只会用第一帧。
 
+### 构建性能（CPU）
+
+两个旋钮配合使用：
+
+- `system.processing.sharpConcurrency`（`builder.config.ts`）：每个 sharp 操作内部的 libvips 线程数，默认 `1`。
+- `UV_THREADPOOL_SIZE`（环境变量）：libuv 线程池大小，默认 `4`，决定**同时**有多少个 sharp 操作。必须在启动 Node 前设置，写在 `builder.config.ts` / `.env` 里都无效。
+
+批量构建建议 `UV_THREADPOOL_SIZE=16` + `sharpConcurrency: 2~4`；只有少量大图时可把 `sharpConcurrency` 调高。并发过高会让 CPU 时间翻倍但墙钟收益递减，按机器空闲程度调。
+
 ### 开发
 
 ```bash

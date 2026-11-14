@@ -36,6 +36,9 @@ export default defineBuilderConfig(() => ({
       defaultConcurrency: 10,
       enableLivePhotoDetection: true,
       digestSuffixLength: 8,
+      // 每个 sharp 操作内部的 libvips 线程数（默认 1）。批量构建时优先提高
+      // UV_THREADPOOL_SIZE（进程启动前设置）；需要单张更快时可调到 2–4。
+      sharpConcurrency: 1,
       xmp: {
         keywords: true,
         regions: true,

@@ -9,6 +9,7 @@ export function createDefaultBuilderConfig(): BuilderConfig {
         defaultConcurrency: 10,
         enableLivePhotoDetection: true,
         digestSuffixLength: 0,
+        sharpConcurrency: 1,
         xmp: {
           keywords: true,
           regions: true,

@@ -25,6 +25,9 @@ function applySystemOverrides(target: BuilderConfig['system'], overrides?: Build
     if (processing.digestSuffixLength !== undefined) {
       target.processing.digestSuffixLength = processing.digestSuffixLength
     }
+    if (typeof processing.sharpConcurrency === 'number') {
+      target.processing.sharpConcurrency = processing.sharpConcurrency
+    }
     if (processing.xmp) {
       target.processing.xmp = {
         ...(target.processing.xmp ?? { keywords: true, regions: true }),
