@@ -32,8 +32,8 @@ packages/builder (CLI 流水线)
    sync (S3 / local / GitHub) → EXIF/thumb/blurhash → apps/web/src/data/photos-manifest.json
                                         │
 apps/web (Vite + React 19 SPA) ←────────┘
-   manifestInjectPlugin 把 JSON 内联成 <script id="manifest">window.__MANIFEST__ = ...</script>
-   packages/data 的 PhotoLoader 读取 window.__MANIFEST__
+   manifestInjectPlugin 把 JSON 外置成 photos-manifest.<hash>.json（dev 时内联），
+   并把首屏缩略图 preload 写进 HTML；packages/data 的 PhotoLoader 读 window.__MANIFEST_URL__
 ```
 
 - **没有后端**。`apps/web` 必须能脱离任何 API 独立运行：不要假设有登录、点赞、评论、后台。需要后端的能力走 feature-detect 或直接不渲染。
@@ -44,7 +44,7 @@ apps/web (Vite + React 19 SPA) ←────────┘
 
 ## 插件（全部在仓库内，没有外部插件目录）
 
-- `apps/web/plugins/vite/*` — SPA 的 Vite 插件：`manifest-inject`（内联 `__MANIFEST__`）、`site-config-inject`、`photos-static`、`og-image-plugin`（构建期 OG + favicon）、`feed-sitemap`、`locales-json`（点号 key 展开）、`i18n-hmr`、`deps`（分包）、`ast`（`tw` 宏）。
+- `apps/web/plugins/vite/*` — SPA 的 Vite 插件：`manifest-inject`（外置 manifest + 首屏图片 preload/preconnect）、`site-config-inject`、`photos-static`、`og-image-plugin`（构建期 OG + favicon）、`feed-sitemap`、`locales-json`（点号 key 展开）、`i18n-hmr`、`deps`（分包）、`ast`（`tw` 宏）。
 - `packages/builder/src/plugins/*` — 流水线插件：`storage/{local,s3,b2,github,eagle}`、`thumbnail-storage`、`geocoding`、`github-repo-sync`、`og-image-storage`。
 - **Cloudflare 分享图插件** = `og-image-storage/vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk`。卡片图就是照片本身（1200×630 满幅 WebP，不画底色/站名/标题），文字由平台原生渲染；中间件把 `/photos/:slug` 的 `og:image`/`twitter:image` 改写到 R2 的 `.afilmory/og-images/*.webp`，并按 manifest 注入该照片的 `og:title`/`og:description`/`<title>`/`meta[name=description]`。产物是仓库根 `functions/_middleware.ts`（**构建产物，不提交、已被 ignore**；`pnpm build` 时由 builder 重新生成，改模板后可用 `pnpm og:middleware` 单独重生成，`-- --check` 校验磁盘文件是否最新）。
 - **部署 = Cloudflare Pages 项目 `mgt-afilmory`（生产分支 `main`）**，用仓库里的脚本，别手搓：`pnpm deploy:cloudflare`（构建 + 部署）/ `pnpm deploy:preview`（预览）/ `node scripts/deploy.mjs --skip-build --dry-run`（调试）。脚本必须在**仓库根**执行并以参数传 dist 目录，否则根 `functions/` 不会被打包，OG 改写失效；`apps/web/wrangler.jsonc` 只在 `apps/web` 里部署时生效，别用。中间件缺失时部署脚本会先调用 `pnpm og:middleware` 补生成（依赖 `.env` 里的 `S3_CUSTOM_DOMAIN`）。
