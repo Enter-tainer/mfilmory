@@ -123,7 +123,25 @@ pnpm build            # 把 manifest 外置成 photos-manifest.<hash>.json，产
   这些产物的文件名固定、照片重处理时原地覆盖，所以不能 `immutable`；但完全不带头时浏览器只能用
   启发式缓存（≈10% 文件年龄），新上传的照片几乎每次都要重下。
   **仅对 S3 兼容 provider（s3 / oss / cos）生效**：`b2`、`github`、`local` 三个 provider 会丢弃这个选项。
-  **也只对之后上传的对象生效**——存量对象要生效必须重传。
+  **也只对之后上传的对象生效**——存量对象要生效必须重传，用 `pnpm refresh:cache -- --apply`
+  （只读出来原样写回、不重编码，先 `--verify` 复查；详见下面「媒体产物的缓存与 CDN 刷新」）。
+- **媒体产物的缓存与 CDN 刷新（踩过的坑）**：`S3_CUSTOM_DOMAIN` 指向的域名前面如果还有一层 CDN
+  （本站是腾讯 EdgeOne），它在两种情况下会让「桶里已经更新了、线上还是旧的」：
+  1. **缓存键忽略 query string** —— 加 `?t=<时间戳>` 或 `cache: no-store` 都绕不过；
+  2. **不遵循源站 `Cache-Control` / 覆盖上传后不失效** —— 改了缩略图尺寸或重传了对象，只要它的 TTL
+     没过，就一直在发旧内容。实测：给 1107 个存量产物补上 `Cache-Control` 后，源站 S3 直连 HEAD
+     全部正确，而公开域名上 `og-images/*.webp`（几乎没人访问、没进缓存）40/40 生效，
+     `thumbnails|previews/*.avif`（被大量访问、早已进缓存）0/40 生效，甚至还有 URL 在发
+     512px 的老缩略图（桶里已经是 500px）。根因是站点上手工加过一条规则：
+     `Host ∈ {gallery-store, r2-gallery}` + 图片后缀 → 「自定义 TTL 30 天 + 忽略 query」。
+     **正确的做法是删掉这条特例，用全局的「遵循源站 Cache-Control」**，再刷新一次缓存。
+  排查时可以直接比对两侧：`S3ProviderClient.headObject(key)`（源站）vs 公开 URL 的 HEAD，
+  两边 `cache-control` / `content-length` / `etag` 是否一致。
+- **原图和产物用同一套缓存策略**：`public, max-age=86400, stale-while-revalidate=604800`。
+  **不要给原图加 `immutable`**：`immutable` 的语义是有效期内连条件请求都不发，它只对
+  **文件名里带内容哈希**的资源成立；而这里的文件名是「日期+相机编号」，重新导出同一张照片时
+  文件名不变、内容会变，用 `immutable` 会让回访用户最长一年看不到新图。
+  存量对象补头用 `pnpm refresh:cache -- --apply`（`CopyObject` 原地改元数据、零出网流量）。
 - 分享图不走 Satori/resvg，直接用 sharp 从 2560px 的占位图（preview）缩放出 1200×630 WebP：源图够大、不用再解码重编码成 PNG，也不依赖构建机装中文字体。
 - 原图与产物都有缓存：下载过的原图存在 `apps/web/src/data/.cache/originals/`，每张照片每种产物用哪组参数编码记录在 `.cache/asset-signatures.json`。只改一档参数时其他档不会重算。`MFILMORY_NO_ORIGINAL_CACHE=1` 跳过原图缓存，`MFILMORY_FORCE_ENCODE=1` 强制重编码。
 
