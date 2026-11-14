@@ -101,7 +101,11 @@ function stripBuildOnlyFields(manifestRaw: string): string {
  * 加了 crossorigin 反而会建立一条用不上的 CORS 连接。
  */
 function buildImageOriginPreconnect(photos: RawPhoto[]): string {
-  const thumbnailUrl = photos.find(photo => typeof photo.thumbnailUrl === 'string')?.thumbnailUrl
+  // 必须同时判空串：`new URL('')` 会抛错，一抛就整个 preconnect 静默消失，
+  // 而「某张照片的 thumbnailUrl 是空串」在缩略图生成失败时是会发生的。
+  const thumbnailUrl = photos
+    .map(photo => photo.thumbnailUrl)
+    .find(url => typeof url === 'string' && url.length > 0)
   if (typeof thumbnailUrl !== 'string') {
     return ''
   }

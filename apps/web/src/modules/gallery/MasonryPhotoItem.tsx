@@ -18,14 +18,21 @@ import { formatExifData } from '~/modules/metadata/formatExifData'
 import type { PhotoManifest } from '~/types/photo'
 
 /**
- * 前 N 张用高优先级 + `loading="eager"`，其余降到 `low`。
+ * 前 N 张 `loading="eager"` + `fetchpriority="high"`，**其余完全不设 fetchpriority**。
  *
- * 网格里所有缩略图同权重时，浏览器会一次性发起 ~20 个请求平摊带宽，LCP 那张要等所有
- * 请求各分到一勺才完成。给首屏几张提优先级后，LCP 候选图能先拿到大部分带宽。
+ * 网格里的缩略图都是 `loading="lazy"` 时，浏览器会按自己的启发式排优先级；首屏那几张
+ * 同权重时会一起发出去平摊带宽，LCP 那张要等所有请求各分到一勺才完成。给前几张明确
+ * 提优先级后，LCP 候选图能先拿到大部分带宽。
  *
  * N 必须和 `manifest-inject` 里的 `PRELOADED_THUMBNAIL_COUNT` 对齐：HTML 里 preload 的
- * 就是这 4 张，再多标 high 只会让它们互相抢带宽。
- * （本地 10 次测量的中位数差异在噪声内，均值上 4 比 8 快约 100 ms。）
+ * 就是这几张，再多标 high 只会让它们互相抢带宽。
+ *
+ * **为什么不给其余图片设 `fetchpriority="low"`**：本文件拿到的只是数组下标，不知道
+ * 真实列数（`MasonryView` 会按容器宽度算 2-8 列）。1440px 是 5 列、1920px 是 7 列，
+ * 所以下标 ≥4 的图片**可能就在首屏第一行**；手机 390px 是 2 列，下标 4 就在第二行、
+ * 同样在首屏。给这些图手动降级会**覆盖浏览器的视口内提权**，把真正的 LCP 候选压下去。
+ * 浏览器自己在没有 hint 时的默认行为（视口内提权、视口外降级）比我们用下标猜更准，
+ * 所以这里只加「确定要提前」的 high，不加「可能会错」的 low。
  */
 const EAGER_IMAGE_COUNT = 4
 
@@ -210,7 +217,8 @@ export const MasonryPhotoItem = memo(({
           src={data.thumbnailUrl}
           alt={data.title}
           loading={isAboveTheFold ? 'eager' : 'lazy'}
-          fetchPriority={isAboveTheFold ? 'high' : 'low'}
+          // 只在「确定要提前」时给 high；其余留给浏览器自己的视口判断（见上面注释）
+          fetchPriority={isAboveTheFold ? 'high' : undefined}
           decoding="async"
           className={'absolute inset-0 h-full w-full object-cover duration-300 group-hover:scale-105'}
           onLoad={handleImageLoad}
