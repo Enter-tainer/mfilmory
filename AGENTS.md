@@ -59,6 +59,11 @@ apps/web (Vite + React 19 SPA) ←────────┘
 - `apps/web/src/modules/gallery/PageFooter.tsx` 的 `@config` 导入是修过的（上游是坏的 `~/../../site.config`）；不要按上游原样 merge 回去。
 - `packages/data` 只导出 `PhotoLoader`（`./manifest` 导出已删除）。
 - 根 `package.json` 只剩静态站相关脚本；`@afilmory/*` 包名保持不变（方便与上游对齐代码）。
+- **社交/会话代码已删除（TECH-90）**：`injectConfig.useApi/useCloud/useNext`、`SessionProvider`、
+  `withCloud`、`@tanstack/react-query`、`modules/social/{comments,Reaction}`、`lib/api/*`、
+  `lib/client.ts`、`lib/tracker.ts` 全部不存在；不要再按上游原样 merge 回来。分享弹窗
+  （`modules/social/ShareModal.tsx`，复制链接/系统分享/下载）保留。`@afilmory/sdk` 包本身还在
+  `packages/sdk`，但 `apps/web` 已不依赖它。
 
 ## 代码规范（沿用上游）
 

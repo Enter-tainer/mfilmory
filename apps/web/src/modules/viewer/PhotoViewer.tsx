@@ -24,17 +24,15 @@ import { Navigation, Virtual } from 'swiper/modules'
 import { Swiper, SwiperSlide } from 'swiper/react'
 import { useMediaQuery } from 'usehooks-ts'
 
-import { injectConfig, siteConfig } from '~/config'
+import { siteConfig } from '~/config'
 import { useMobile } from '~/hooks/useMobile'
 import { deriveAccentFromSources } from '~/lib/color'
 import type { LoadingIndicatorRef } from '~/modules/inspector/LoadingIndicator'
 import { LoadingIndicator } from '~/modules/inspector/LoadingIndicator'
-import { PhotoInspector } from '~/modules/inspector/PhotoInspector'
+import { ExifPanel } from '~/modules/metadata/ExifPanel'
 import { ShareModal } from '~/modules/social/ShareModal'
 import type { PhotoManifest } from '~/types/photo'
 
-import { ReactionRail } from '../social'
-import { canUsePhotoReactions } from '../social/reaction-availability'
 import { resolvePhotoViewerEntryState, shouldHideCurrentViewerImage } from './entry-animation-state'
 import { GalleryThumbnail } from './GalleryThumbnail'
 import { MobilePhotoInspectorSheet } from './MobilePhotoInspectorSheet'
@@ -73,7 +71,6 @@ export const PhotoViewer = ({
   const { t } = useTranslation()
   const isMobile = useMobile()
   const canHoverRegions = useMediaQuery('(hover: hover) and (pointer: fine)')
-  const showPhotoReactions = canUsePhotoReactions(injectConfig)
   const swiperRef = useRef<SwiperType | null>(null)
   const [isImageZoomed, setIsImageZoomed] = useState(false)
   const [isCurrentImageVisualReady, setIsCurrentImageVisualReady] = useState(false)
@@ -602,7 +599,6 @@ export const PhotoViewer = ({
                                 className="flex items-center justify-center"
                                 virtualIndex={index}
                               >
-                                {showPhotoReactions && <ReactionRail photoId={photo.id} />}
                                 <m.div
                                   initial={suppressSlideEntry ? false : { opacity: 0.5, scale: 0.95 }}
                                   animate={suppressSlideEntry ? undefined : { opacity: 1, scale: 1 }}
@@ -727,7 +723,7 @@ export const PhotoViewer = ({
                 </m.div>
               </div>
 
-              {/* PhotoInspector - 根据设备与折叠状态展示 */}
+              {/* EXIF 面板 - 根据设备与折叠状态展示 */}
               <Suspense>
                 {isMobile ? (
                   <MobilePhotoInspectorSheet
@@ -743,7 +739,7 @@ export const PhotoViewer = ({
                   />
                 ) : (
                   isInspectorVisible && (
-                    <PhotoInspector
+                    <ExifPanel
                       currentPhoto={currentPhoto}
                       exifData={currentPhoto.exif}
                       activeRegionId={activeRegionId}

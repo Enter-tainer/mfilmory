@@ -63,7 +63,7 @@
 - `apps/mobile` —— 原生 Swift/UIKit iOS App
 - `apps/site` / `apps/docs` / `apps/landing` / `apps/promo` —— Astro 官网、文档站、推广页
 - `docs/`、`.specstory/`、Dockerfile / docker-compose、以及只服务上述部分的 CI workflow
-- 依赖后端才有意义的能力（登录、点赞/评论同步、后台管理）在静态模式下自动降级或缺省
+- 依赖后端才有意义的能力（登录、点赞/评论、后台管理）不是运行时降级，而是**直接删掉了**：`apps/web` 里不再有会话 provider、评论/Reaction、登录入口，也没有 `@tanstack/react-query` / `@afilmory/sdk` / `swr` / `immer` 依赖（TECH-90，入口 JS brotli −14.6 KB）。分享弹窗保留（复制链接 / 系统分享 / 下载原图与预览图）。
 
 ## 快速开始
 

@@ -2,14 +2,6 @@ import type { SiteConfig } from '@config'
 import defaultSiteConfig from '@config'
 import { merge } from 'es-toolkit/compat'
 
-const defaultInjectConfig = {
-  useApi: false,
-  useNext: false,
-  useCloud: false,
-}
-
-export const injectConfig = merge(defaultInjectConfig, __CONFIG__)
-
 const getInjectedSiteConfig = (): Partial<SiteConfig> | undefined => {
   if (window.__SITE_CONFIG__) {
     return window.__SITE_CONFIG__

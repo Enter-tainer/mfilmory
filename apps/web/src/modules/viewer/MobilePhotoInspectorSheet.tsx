@@ -1,20 +1,13 @@
 import type { PickedExif } from '@afilmory/builder'
-import { MobileTabGroup, MobileTabItem } from '@afilmory/ui'
 import { createInspectorSheetPresentation, resolveInspectorSheetHeight } from '@afilmory/viewer-motion'
-import { useQuery } from '@tanstack/react-query'
 import type { MotionValue } from 'motion/react'
 import { m, useTransform } from 'motion/react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { injectConfig } from '~/config'
 import { useViewport } from '~/hooks/useViewport'
-import { commentsApi } from '~/lib/api/comments'
 import { ExifPanelContent } from '~/modules/metadata/ExifPanel'
-import { CommentsPanel } from '~/modules/social/comments'
 import type { PhotoManifest } from '~/types/photo'
-
-type Tab = 'info' | 'comments'
 
 interface MobilePhotoInspectorSheetProps {
   createPresentation?: typeof createInspectorSheetPresentation
@@ -40,22 +33,9 @@ export const MobilePhotoInspectorSheet = ({
   onActiveRegionChange,
 }: MobilePhotoInspectorSheetProps) => {
   const { t } = useTranslation()
-  const [activeTab, setActiveTab] = useState<Tab>('info')
   const sheetRef = useRef<HTMLDivElement>(null)
   const viewportHeight = useViewport(value => value.h) || (typeof window !== 'undefined' ? window.innerHeight : 844)
   const sheetHeight = useMemo(() => resolveHeight(viewportHeight), [resolveHeight, viewportHeight])
-
-  const showSocialFeatures = injectConfig.useCloud
-  const { data: commentCount } = useQuery({
-    queryKey: ['comment-count', currentPhoto.id],
-    queryFn: () => commentsApi.count(currentPhoto.id),
-    enabled: showSocialFeatures,
-  })
-  const hasComments = (commentCount?.count ?? 0) > 0
-
-  useEffect(() => {
-    setActiveTab('info')
-  }, [currentPhoto.id])
 
   useEffect(() => {
     if (!isInteractive) {
@@ -117,31 +97,7 @@ export const MobilePhotoInspectorSheet = ({
 
           <div className="flex items-center gap-2 pb-1">
             <div className="min-w-0 flex-1">
-              {showSocialFeatures ? (
-                <MobileTabGroup value={activeTab} onValueChanged={value => setActiveTab(value as Tab)}>
-                  <MobileTabItem
-                    value="info"
-                    label={(
-                      <div className="flex items-center">
-                        <i className="i-mingcute-information-line mr-1.5 text-base" />
-                        {t('inspector.tab.info')}
-                      </div>
-                    )}
-                  />
-                  <MobileTabItem
-                    value="comments"
-                    label={(
-                      <div className="flex items-center">
-                        <i className="i-mingcute-comment-line mr-1.5 text-base" />
-                        {t('inspector.tab.comments')}
-                        {hasComments && <div className="bg-accent ml-1.5 size-1.5 rounded-full" />}
-                      </div>
-                    )}
-                  />
-                </MobileTabGroup>
-              ) : (
-                <div className="text-base font-semibold text-white">{t('exif.header.title')}</div>
-              )}
+              <div className="text-base font-semibold text-white">{t('exif.header.title')}</div>
             </div>
 
             <button
@@ -156,20 +112,14 @@ export const MobilePhotoInspectorSheet = ({
         </div>
 
         <div className="relative z-10 flex min-h-0 flex-1 flex-col">
-          {activeTab === 'info' ? (
-            <ExifPanelContent
-              currentPhoto={currentPhoto}
-              exifData={exifData}
-              activeRegionId={activeRegionId}
-              onActiveRegionChange={onActiveRegionChange}
-              rootClassName="min-h-0 flex-1"
-              viewportClassName="px-4 pb-[calc(env(safe-area-inset-bottom)+20px)] **:select-text"
-            />
-          ) : (
-            <div className="min-h-0 flex-1 pb-[calc(env(safe-area-inset-bottom)+8px)]">
-              <CommentsPanel photoId={currentPhoto.id} />
-            </div>
-          )}
+          <ExifPanelContent
+            currentPhoto={currentPhoto}
+            exifData={exifData}
+            activeRegionId={activeRegionId}
+            onActiveRegionChange={onActiveRegionChange}
+            rootClassName="min-h-0 flex-1"
+            viewportClassName="px-4 pb-[calc(env(safe-area-inset-bottom)+20px)] **:select-text"
+          />
         </div>
       </m.div>
     </m.div>
