@@ -4,7 +4,10 @@ import AST from 'unplugin-ast/vite'
 
 // Custom transformer for tw function that compresses template strings
 const TwTransformer: Transformer<any> = {
-  onNode: (node) => isTaggedFunctionCallOf(node, ['tw']),
+  // unplugin-ast 的 node 是 `@yuku-toolchain/types` 的 Program，而 ast-kit 的
+  // `isTaggedFunctionCallOf` 收的是 `@babel/types` 的 Node —— 两个包的 AST 类型
+  // 结构一致但声明不兼容，这里显式放宽成 any（只做一次带 tag 名的属性判断）。
+  onNode: (node: any) => isTaggedFunctionCallOf(node, ['tw']),
   transform(node) {
     if (node.type === 'TaggedTemplateExpression') {
       const { quasi } = node

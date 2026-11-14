@@ -13,6 +13,14 @@ import type { Client } from '@afilmory/sdk'
 let clientPromise: Promise<Client> | null = null
 
 export const getClient = (): Promise<Client> => {
-  clientPromise ??= import('@afilmory/sdk').then(({ Client: SdkClient }) => new SdkClient(window.location.origin))
+  clientPromise ??= import('@afilmory/sdk')
+    .then(({ Client: SdkClient }) => new SdkClient(window.location.origin))
+    .catch((error) => {
+      // 失败的 promise 不能缓存：`@afilmory/sdk` 是带 hash 的不可变 chunk，
+      // 只有网络瞬时故障/部署切换窗口会失败，把 rejection 永久钉在模块作用域里
+      // 会让「重试」变成永远失败。清掉后下一次调用重新 import()。
+      clientPromise = null
+      throw error
+    })
   return clientPromise
 }

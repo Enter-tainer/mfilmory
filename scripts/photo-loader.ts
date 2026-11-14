@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { workdir } from '../packages/builder/src/path.js'
-import type { PhotoManifestItem } from '../packages/builder/src/types/photo.js'
+import type { PhotoManifestItem } from '../packages/typing/src/photo.js'
 
 class BuildTimePhotoLoader {
   private photos: PhotoManifestItem[] = []

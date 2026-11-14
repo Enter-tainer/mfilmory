@@ -144,7 +144,6 @@ export const MasonryPhotoItem = memo(({
 
   // Live Photo/Motion Photo hover 处理（仅在桌面端）
   const handleMouseEnter = useCallback(() => {
-
     if (isMobileDevice || !hasVideo || !livePhotoVideoLoaded || isPlayingLivePhoto || isConvertingVideo) {
       return
     }
