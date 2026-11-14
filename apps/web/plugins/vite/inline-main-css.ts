@@ -27,11 +27,25 @@ import type { OutputBundle, Plugin } from 'vite'
  *
  * 所以这里做三件事，缺一不可：
  * 1. 删 asset 的同时，把该文件名从**所有** chunk 的 `viteMetadata.importedCss` 里摘掉；
- * 2. `writeBundle` 里读磁盘上的 `index.html` 和内存里的 chunk 代码，断言没有任何一处
- *    还引用被删掉的文件 —— 任何未来改动（Vite 升级、开 `build.manifest`、加 precache）
- *    只要把引用带回来，构建立刻失败，而不是上线后静默 404；
+ * 2. `writeBundle` 里扫一遍内存里的 chunk 代码 + 所有 asset 的源码 + 磁盘上的 `index.html`。
+ *    断言能抓到的是：`__vite__mapDeps`（默认开启，写进 chunk.code）、`build.manifest` /
+ *    `build.ssrManifest` / `build.chunkImportMap` / PWA 的 `sw.js`（都写进 asset，而 asset
+ *    也在这个扫描范围内），以及 HTML 里残留的 `<link>`。
+ *    **抓不到**的是：注册在本插件**之后**的第三方插件在 writeBundle 里再改代码 —— 本仓库的
+ *    依赖树里没有这种插件（`manifest-inject` 的 writeBundle 只写 photos-manifest.json，
+ *    `vite-plugin-pwa` 用 generateBundle/closeBundle），但这是个前提，不是保证；
  * 3. 拿不到 CSS / 匹配不到 `<link>` / 出现 `</style` 这些「优化静默失效」的路径一律
  *    warn 或 error，不再闷声放过。
+ *
+ * 另一个前提：清理要生效，依赖 `vite:build-html` 的 generateBundle 早于
+ * `vite:build-import-analysis` 的 generateBundle（后者才是生成 `__vite__mapDeps` 的地方）。
+ * 当前 Vite 8.3.4 是这个顺序（`node.js:34073` < `34549`），但这是注册顺序、不是 API 承诺。
+ * 即使哪天翻转，清理变成空操作也不会静默放行 —— 那时 chunk.code 里已经有 CSS 名，
+ * 下面的断言会把它变成构建失败。
+ *
+ * 还要知道：rollup 是**先写盘再跑 writeBundle**，所以断言失败时 `dist/` 里已经有一份坏产物，
+ * 失败只体现在退出码。CI / 部署脚本必须尊重退出码（本仓库 `scripts/deploy.mjs` 用 execSync，
+ * 会抛）。
  *
  * 另外 `vite.config.ts` 里的 `createHtmlPlugin({ minify: { minifyCSS: true } })` 必须关掉：
  * 它在 `generateBundle`（晚于所有 `transformIndexHtml`）把内联后的整份 CSS 再丢给
@@ -128,10 +142,16 @@ export function inlineMainCssPlugin(): Plugin {
             : new TextDecoder().decode(asset.source)
 
           // `</style` 会提前结束 rawtext 元素；HTML 的结束标签是大小写不敏感的。
-          // 正常 CSS 里不可能出现它 —— 出现了说明有人在往 CSS 里塞 markup，
+          // 但只有 `</style` 后面紧跟空白 / `/` / `>` 时才算（tokenizer 的规则），
+          // 所以 `</stylesheet` 这种**不该**触发 —— 用 lookahead 收紧，免得误伤。
+          // 正常 CSS 里不可能真的出现它；出现了说明有人在往 CSS 里塞 markup，
           // 这是构建期就该炸的错误，不该靠静默改字节糊过去。
-          if (/<\/style/i.test(css)) {
-            this.error(`[inline-main-css] ${fileName} 里出现了 </style，无法安全内联`)
+          if (/<\/style(?=[\s/>])/i.test(css)) {
+            const at = css.search(/<\/style(?=[\s/>])/i)
+            this.error(
+              `[inline-main-css] ${fileName} 里出现了能提前闭合 </style> 的字节`
+              + `（偏移 ${at}：${JSON.stringify(css.slice(Math.max(0, at - 40), at + 40))}），无法安全内联`,
+            )
           }
 
           // 注意用函数式 replacer：字符串形式会把 CSS 里的 `$&` / `$'` / `$1` 当成
@@ -174,17 +194,25 @@ export function inlineMainCssPlugin(): Plugin {
         }
       }
 
-      // 2) 任何 chunk 的代码里都不该出现被删文件名 —— 这正是 __vite__mapDeps 那种
-      //    「JS 里留了引用、运行时去请求一个不存在的文件」的防线
+      // 2) chunk 代码里不该出现被删文件名（这就是 __vite__mapDeps 那条路径），
+      //    asset 源码里也不该出现（build.manifest / ssrManifest / chunkImportMap / sw.js）。
+      //    两类都要扫：只扫 chunk 的话，「开了 build.manifest 会写出悬空 css 字段」这种情况
+      //    是发现不了的。`typeof … === 'string'` 的防御是怕将来 Vite 在写盘后释放 code。
       for (const [bundleKey, output] of Object.entries(bundle)) {
-        if (output.type !== 'chunk') {
+        const source = output.type === 'chunk'
+          ? (typeof output.code === 'string' ? output.code : '')
+          : (typeof output.source === 'string'
+              ? output.source
+              : (output.source instanceof Uint8Array ? new TextDecoder().decode(output.source) : ''))
+
+        if (!source) {
           continue
         }
         for (const fileName of inlinedFileNames) {
-          if (output.code.includes(fileName)) {
+          if (source.includes(fileName)) {
             this.error(
-              `[inline-main-css] chunk ${bundleKey} 仍引用已内联的 ${fileName}`
-              + `（Vite 的 __vite__mapDeps 会让懒加载路由去请求一个不存在的文件）`,
+              `[inline-main-css] ${output.type} ${bundleKey} 仍引用已内联的 ${fileName}`
+              + `（Vite 的 __vite__mapDeps / manifest / sw.js 会让运行时去请求一个不存在的文件）`,
             )
           }
         }
