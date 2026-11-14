@@ -165,6 +165,10 @@ pnpm lint            # eslint --fix
   `"include": ["/*"]`，于是**每条** HTML 请求都会进 Function、响应 `cf-cache-status` 恒为 `DYNAMIC`。
   收窄之后其余路径由静态资源处理器直接响应（SPA 回退不依赖 Function：没有顶层 `404.html` 时
   Pages 对未命中的路径本来就回 `/`）。
+- **`exclude` 键必须存在，哪怕是空数组**。`wrangler pages deploy` 会按
+  `{ version, include: string[], exclude: string[] }` 校验，只写 `include` 会直接让部署失败并报
+  `Invalid _routes.json file found`。所以正确写法是
+  `{"version": 1, "include": ["/photos/*"], "exclude": []}`。
 - **`_headers` 不作用于 Pages Function 生成的响应**，所以 `/photos/*` 的缓存头只能在中间件里给
   Response 加；写在 `_headers` 里对它无效。
 - `_headers` 按**请求 URL** 匹配，`/` 这条规则只覆盖根路径，`/map`、`/photos/:id` 这类 SPA 深链
