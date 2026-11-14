@@ -96,10 +96,13 @@ export const MasonryView = ({ photos, onRender }: MasonryViewProps) => {
       columnGutter={4}
       rowGutter={4}
       itemHeightEstimate={400}
-      // masonic 默认渲染「视口高度 ×2」的额外内容，1440×900 下会一次性挂载 ~43 个
-      // MasonryPhotoItem，也就是首屏就发出 43 个缩略图请求（≈756 KB）。
-      // 缩到 1 倍：仍有一整屏的预渲染缓冲，但首屏图片请求减半。
-      overscanBy={1}
+      // masonic 的渲染带是 [scrollTop − 0.5h·k, scrollTop + h·k]，k = overscanBy（默认 2）：
+      //   k=2 → [−1h, +2h]，上方缓冲 1h、下方缓冲 1h，共 3h 的内容
+      //   k=1 → [−0.5h, +1h]，上方缓冲 0.5h、**下方缓冲 0**（视口底边即渲染带终点）
+      // 1440×900 下 k=2 会挂载 ~45 个 MasonryPhotoItem = 45 个缩略图请求；
+      // k=1 只挂 ~25 个，但下方零缓冲，滚动条拖动/移动端 fling 时会出现 1–3 帧空洞。
+      // 取 1.5：上方 0.75h、下方 0.5h（≈400px），挂载 ~34 个，仍能砍掉约 1/4 的首屏图片请求。
+      overscanBy={1.5}
       itemKey={useCallback((data, _index) => {
         return data.id
       }, [])}
