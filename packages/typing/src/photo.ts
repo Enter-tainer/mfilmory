@@ -122,6 +122,13 @@ export interface PhotoManifestItem extends PhotoInfo {
   toneAnalysis: ToneAnalysis | null // 影调分析结果
   location: LocationInfo | null // 地理位置信息（反向地理编码）
   isHDR?: boolean
+  /**
+   * 上次处理是否完整成功（所有产物都上传成功）。
+   * 缺省视为 `true`（旧 manifest 没有这个字段）；`false` 会让下一次增量构建重新处理这张照片。
+   */
+  lastProcessSuccess?: boolean
+  /** 上次处理中失败的上传项（最多保留最近 10 条），用于构建结束汇总和排查。 */
+  uploadFailures?: string[]
   // Video source (Live Photo or Motion Photo)
   video?: VideoSource
 }

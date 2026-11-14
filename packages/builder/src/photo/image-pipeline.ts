@@ -409,5 +409,9 @@ export async function processPhotoWithPipeline(
     result,
   })
 
+  if (result.item) {
+    result.item.lastProcessSuccess = !result.item.uploadFailures?.length
+  }
+
   return result
 }

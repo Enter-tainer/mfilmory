@@ -1,6 +1,7 @@
 import { StorageManager } from '../../storage/index.js'
 import type { S3CompatibleConfig, StorageConfig } from '../../storage/interfaces.js'
 import type { BuilderPlugin } from '../types.js'
+import { recordUploadFailure } from '../upload-failure.js'
 import type { ThumbnailPluginData } from './shared.js'
 import {
   contentTypeFromFilename,
@@ -179,6 +180,7 @@ export default function thumbnailStoragePlugin(options: ThumbnailStoragePluginOp
             state.uploaded.add(remoteKey)
           } catch (error) {
             logger.thumbnail.error(`上传缩略图失败：${remoteKey}`, error)
+            recordUploadFailure(payload.result.item, 'thumbnail', error)
             return
           }
         }
@@ -213,6 +215,7 @@ export default function thumbnailStoragePlugin(options: ThumbnailStoragePluginOp
             state.uploaded.add(previewKey)
           } catch (error) {
             logger.thumbnail.error(`上传占位图失败：${previewKey}`, error)
+            recordUploadFailure(payload.result.item, 'preview', error)
             return
           }
         }

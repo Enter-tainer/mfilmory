@@ -28,7 +28,11 @@ export default defineBuilderConfig(() => ({
     idleTimeoutMs: 10_000,
     totalTimeoutMs: 60_000,
     retryMode: 'standard',
+    // 下载/上传共用：只对网络错误和 408/425/429/5xx 重试，4xx 直接失败
     maxAttempts: 3,
+    retryBaseDelayMs: 300,
+    retryMaxDelayMs: 4_000,
+    uploadTimeoutMs: 60_000,
     downloadConcurrency: 16,
   },
   system: {

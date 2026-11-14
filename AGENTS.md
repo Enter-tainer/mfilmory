@@ -40,6 +40,7 @@ apps/web (Vite + React 19 SPA) ←────────┘
 - `apps/web` 是唯一的 Web UI 代码库；页面（`src/pages`）只做路由壳，真实 UI/逻辑在 `src/modules/<domain>/`。
 - 配置分层不要混：`builder.config.ts` 是**基础设施**（照片来源、并发、插件）；`site.config.ts` + `config.json` 是**展示**（站名、作者、主题色、地图、备案）。二者都只在构建期被读取。
 - 照片流水线只允许 `packages/builder` 碰存储；共享类型在 `packages/typing`；照片查询一律走 `packages/data` 的 `PhotoLoader`。
+- 存储重试/超时在 `storage.maxAttempts` / `retryBaseDelayMs` / `retryMaxDelayMs` / `uploadTimeoutMs`（S3/B2/GitHub 通用，只重试瞬时错误）。上传最终失败会写 `lastProcessSuccess: false` + `uploadFailures`，下一次增量构建自动重试。
 - `pnpm dev` 的 `precheck` 会真的去跑 `build:manifest`（因此需要 `.env` / `builder.config.ts` 可用）；只想跑 Vite 时用 `pnpm --filter @afilmory/web exec vite`。
 
 ## 插件（全部在仓库内，没有外部插件目录）

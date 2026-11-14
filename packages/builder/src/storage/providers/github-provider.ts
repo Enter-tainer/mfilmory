@@ -10,6 +10,12 @@ import type {
   StorageProvider,
   StorageUploadOptions,
 } from '../interfaces.js'
+import {
+  resolveRetryOptions,
+  StorageHttpError,
+  uploadAbortSignal,
+  withRetry,
+} from './retry.js'
 
 // GitHub API 响应类型
 interface GitHubFileContent {
@@ -106,59 +112,69 @@ export class GitHubStorageProvider implements StorageProvider {
 
   async getFile(key: string): Promise<Buffer | null> {
     const logger = getGlobalLoggers().s3
+    const retry = resolveRetryOptions(this.config)
 
     try {
       logger.info(`下载文件：${key}`)
-      const startTime = Date.now()
-
-      const fullPath = this.getFullPath(key)
-      const url = `${this.baseApiUrl}/contents/${fullPath}?ref=${this.githubConfig.branch}`
-
-      const response = await fetch(url, {
-        headers: this.getAuthHeaders(),
+      return await withRetry(() => this.getFileOnce(key), {
+        ...retry,
+        label: `下载 ${key}`,
+        logger,
       })
-
-      if (!response.ok) {
-        if (response.status === 404) {
-          logger.warn(`文件不存在：${key}`)
-          return null
-        }
-        throw new Error(`GitHub API 请求失败：${response.status} ${response.statusText}`)
-      }
-
-      const data = (await response.json()) as GitHubFileContent
-
-      if (data.type !== 'file') {
-        logger.error(`路径不是文件：${key}`)
-        return null
-      }
-
-      let fileBuffer: Buffer
-
-      if (data.download_url) {
-        // 使用 download_url 获取文件内容（推荐方式）
-        const fileResponse = await fetch(data.download_url)
-        if (!fileResponse.ok) {
-          throw new Error(`下载文件失败：${fileResponse.status} ${fileResponse.statusText}`)
-        }
-        const arrayBuffer = await fileResponse.arrayBuffer()
-        fileBuffer = Buffer.from(arrayBuffer)
-      } else if (data.content && data.encoding === 'base64') {
-        // 从 API 响应中解码 base64 内容
-        fileBuffer = Buffer.from(data.content, 'base64')
-      } else {
-        throw new Error('无法获取文件内容')
-      }
-
-      const duration = Date.now() - startTime
-      const sizeKB = Math.round(fileBuffer.length / 1024)
-      logger.success(`下载完成：${key} (${sizeKB}KB, ${duration}ms)`)
-
-      return fileBuffer
     } catch (error) {
       logger.error(`下载失败：${key}`, error)
       return null
     }
+  }
+
+  private async getFileOnce(key: string): Promise<Buffer | null> {
+    const logger = getGlobalLoggers().s3
+    const startTime = Date.now()
+
+    const fullPath = this.getFullPath(key)
+    const url = `${this.baseApiUrl}/contents/${fullPath}?ref=${this.githubConfig.branch}`
+
+    const response = await fetch(url, {
+      headers: this.getAuthHeaders(),
+    })
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        logger.warn(`文件不存在：${key}`)
+        return null
+      }
+      throw new StorageHttpError(response.status, `GitHub API 请求失败：${response.status} ${response.statusText}`)
+    }
+
+    const data = (await response.json()) as GitHubFileContent
+
+    if (data.type !== 'file') {
+      logger.error(`路径不是文件：${key}`)
+      return null
+    }
+
+    let fileBuffer: Buffer
+
+    if (data.download_url) {
+      // 使用 download_url 获取文件内容（推荐方式）
+      const fileResponse = await fetch(data.download_url)
+      if (!fileResponse.ok) {
+        throw new StorageHttpError(fileResponse.status, `下载文件失败：${fileResponse.status} ${fileResponse.statusText}`)
+      }
+      const arrayBuffer = await fileResponse.arrayBuffer()
+      fileBuffer = Buffer.from(arrayBuffer)
+    } else if (data.content && data.encoding === 'base64') {
+      // 从 API 响应中解码 base64 内容
+      fileBuffer = Buffer.from(data.content, 'base64')
+    } else {
+      throw new Error('无法获取文件内容')
+    }
+
+    const duration = Date.now() - startTime
+    const sizeKB = Math.round(fileBuffer.length / 1024)
+    logger.success(`下载完成：${key} (${sizeKB}KB, ${duration}ms)`)
+
+    return fileBuffer
   }
 
   async listImages(): Promise<StorageObject[]> {
@@ -269,7 +285,21 @@ export class GitHubStorageProvider implements StorageProvider {
     }
   }
 
-  async uploadFile(key: string, data: Buffer, _options?: StorageUploadOptions): Promise<StorageObject> {
+  async uploadFile(key: string, data: Buffer, options?: StorageUploadOptions): Promise<StorageObject> {
+    const retry = resolveRetryOptions(this.config)
+
+    return await withRetry(() => this.uploadFileOnce(key, data, options), {
+      ...retry,
+      label: `上传 ${key}`,
+      logger: getGlobalLoggers().s3,
+    })
+  }
+
+  private async uploadFileOnce(
+    key: string,
+    data: Buffer,
+    _options?: StorageUploadOptions,
+  ): Promise<StorageObject> {
     const metadata = await this.fetchContentMetadata(key)
     const fullPath = this.getFullPath(key)
     const url = `${this.baseApiUrl}/contents/${fullPath}`
@@ -291,10 +321,11 @@ export class GitHubStorageProvider implements StorageProvider {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
+      signal: uploadAbortSignal(resolveRetryOptions(this.config).uploadTimeoutMs),
     })
 
     if (!response.ok) {
-      throw new Error(`GitHub 上传文件失败：${response.status} ${response.statusText}`)
+      throw new StorageHttpError(response.status, `GitHub 上传文件失败：${response.status} ${response.statusText}`)
     }
 
     const result = (await response.json()) as { content?: GitHubFileContent }

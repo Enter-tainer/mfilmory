@@ -27,11 +27,12 @@ export class S3ProviderClient {
     })
   }
 
-  async putObject(key: string, body: BodyInit, headers?: HeadersInit): Promise<Response> {
+  async putObject(key: string, body: BodyInit, headers?: HeadersInit, signal?: AbortSignal): Promise<Response> {
     return await this.client.fetch(this.buildObjectUrl(key), {
       method: 'PUT',
       body,
       headers,
+      signal,
     })
   }
 
