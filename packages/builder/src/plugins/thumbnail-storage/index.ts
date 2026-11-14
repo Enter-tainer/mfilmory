@@ -6,6 +6,7 @@ import {
   contentTypeFromFilename,
   DEFAULT_DIRECTORY,
   DEFAULT_PREVIEW_DIRECTORY,
+  MEDIA_CACHE_CONTROL,
   PREVIEW_PLUGIN_DATA_KEY,
   THUMBNAIL_PLUGIN_DATA_KEY,
   THUMBNAIL_PLUGIN_SYMBOL,
@@ -172,6 +173,7 @@ export default function thumbnailStoragePlugin(options: ThumbnailStoragePluginOp
         if (!state.uploaded.has(remoteKey)) {
           try {
             await storageManager.uploadFile(remoteKey, data.buffer, {
+              cacheControl: MEDIA_CACHE_CONTROL,
               contentType: resolved.contentType || contentTypeFromFilename(data.fileName),
             })
             state.uploaded.add(remoteKey)
@@ -205,6 +207,7 @@ export default function thumbnailStoragePlugin(options: ThumbnailStoragePluginOp
         if (!state.uploaded.has(previewKey)) {
           try {
             await storageManager.uploadFile(previewKey, previewData.buffer, {
+              cacheControl: MEDIA_CACHE_CONTROL,
               contentType: resolved.contentType || contentTypeFromFilename(previewData.fileName),
             })
             state.uploaded.add(previewKey)

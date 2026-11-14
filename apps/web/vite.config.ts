@@ -22,6 +22,7 @@ import { siteConfig } from '../../site.config'
 import { astPlugin } from './plugins/vite/ast'
 import { createDependencyChunksPlugin } from './plugins/vite/deps'
 import { createFeedSitemapPlugin } from './plugins/vite/feed-sitemap'
+import { inlineMainCssPlugin } from './plugins/vite/inline-main-css'
 import { localesJsonPlugin } from './plugins/vite/locales-json'
 import { manifestInjectPlugin } from './plugins/vite/manifest-inject'
 import { ogImagePlugin } from './plugins/vite/og-image-plugin'
@@ -66,6 +67,7 @@ const routeGenPlugins: PluginOption[] = [
 ]
 const staticWebBuildPlugins: PluginOption[] = [
   manifestInjectPlugin(),
+  inlineMainCssPlugin(),
   siteConfigInjectPlugin(),
   photosStaticPlugin(),
   // PWA service worker has been retired: it provided no offline capability (navigateFallback was
@@ -132,7 +134,13 @@ const staticWebBuildPlugins: PluginOption[] = [
       removeScriptTypeAttributes: true,
       removeStyleLinkTypeAttributes: true,
       useShortDoctype: true,
-      minifyCSS: true,
+      // 不能用 `true`：`inlineMainCssPlugin` 把整份主样式表（428 025 B / 418 KiB 原始字节，
+      // 428 024 B 内联进 `<style>`）之后，
+      // 这里的 html-minifier-terser 会在 generateBundle（晚于所有 transformIndexHtml）
+      // 把它再丢给 clean-css 重压一遍。clean-css 5.3.3 不认识 `@scope`，会把 DaisyUI
+      // `join` 那一整块静默删掉 —— 于是「产物里的 CSS」和「浏览器实际拿到的 CSS」不是
+      // 同一份，而且只在 HTML 侧被改、没有任何报错。Vite 已经把 CSS 压过了，这里不需要。
+      minifyCSS: false,
       minifyJS: true,
     },
     inject: {

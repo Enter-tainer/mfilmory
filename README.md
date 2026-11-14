@@ -118,6 +118,12 @@ pnpm build            # 把 manifest 外置成 photos-manifest.<hash>.json，产
 - 缩略图文件名/扩展名统一由 `packages/builder/src/image/thumbnail.ts` 的 `getThumbnailFilename()` 提供，不要再硬编码 `.jpg`（上游 #259 就是这么坏的）。
 - 换格式要全量重生成：`pnpm build:manifest -- --force-thumbnails`。残留的旧格式文件由 `handleDeletedPhotos` 清理——只在新格式文件已存在时才删，避免 `--force-manifest`（不重生成缩略图）把唯一副本删掉。
 - 远端存储里的旧格式对象**不会**自动删（`thumbnail-storage` 把自己的前缀排除在扫描外）：用 `pnpm cleanup:assets` 统计，`-- --delete` 清缩略图，其他目录加 `--directory=.afilmory/og-images --keep=webp`。**先确认线上 manifest 已经不引用旧格式再删**。
+- 缩略图 / 占位图 / OG 卡上传时会带 `Cache-Control: public, max-age=86400, stale-while-revalidate=604800`
+  （`packages/builder/src/plugins/thumbnail-storage/shared.ts` 的 `MEDIA_CACHE_CONTROL`）。
+  这些产物的文件名固定、照片重处理时原地覆盖，所以不能 `immutable`；但完全不带头时浏览器只能用
+  启发式缓存（≈10% 文件年龄），新上传的照片几乎每次都要重下。
+  **仅对 S3 兼容 provider（s3 / oss / cos）生效**：`b2`、`github`、`local` 三个 provider 会丢弃这个选项。
+  **也只对之后上传的对象生效**——存量对象要生效必须重传。
 - 分享图不走 Satori/resvg，直接用 sharp 从 2560px 的占位图（preview）缩放出 1200×630 WebP：源图够大、不用再解码重编码成 PNG，也不依赖构建机装中文字体。
 - 原图与产物都有缓存：下载过的原图存在 `apps/web/src/data/.cache/originals/`，每张照片每种产物用哪组参数编码记录在 `.cache/asset-signatures.json`。只改一档参数时其他档不会重算。`MFILMORY_NO_ORIGINAL_CACHE=1` 跳过原图缓存，`MFILMORY_FORCE_ENCODE=1` 强制重编码。
 
@@ -152,6 +158,21 @@ pnpm lint            # eslint --fix
 `preload` + `window.__MANIFEST__`/`window.__MANIFEST_URL__`），这样 HTML 只有几 KB 且能被边缘缓存；
 设 `AFILMORY_EMBED_MANIFEST=true` 可切回「整份内联进 HTML」的老行为（`pnpm dev` 默认内联）。
 静态资源的缓存头在 `apps/web/public/_headers`（Cloudflare Pages 格式），带 hash 的资源一年 immutable。
+
+**Pages Function 的调用范围由 `_routes.json` 控制，别让它吞掉整站**：
+
+- `apps/web/public/_routes.json` 只把 `/photos/*` 交给 Pages Function（OG 中间件）。旧配置写的是
+  `"include": ["/*"]`，于是**每条** HTML 请求都会进 Function、响应 `cf-cache-status` 恒为 `DYNAMIC`。
+  收窄之后其余路径由静态资源处理器直接响应（SPA 回退不依赖 Function：没有顶层 `404.html` 时
+  Pages 对未命中的路径本来就回 `/`）。
+- **`_headers` 不作用于 Pages Function 生成的响应**，所以 `/photos/*` 的缓存头只能在中间件里给
+  Response 加；写在 `_headers` 里对它无效。
+- `_headers` 按**请求 URL** 匹配，`/` 这条规则只覆盖根路径，`/map`、`/photos/:id` 这类 SPA 深链
+  拿不到它。想让深链也命中边缘缓存得按路由逐条写（`/*` 还会和 `/assets/*` 的 immutable 逗号拼接成
+  冲突指令，官方专门警告过），收益与风险都不划算，所以 **HTML 仍保持 `max-age=0, must-revalidate`**。
+- 以后若要给 HTML 加共享缓存，注意 `s-maxage` 会**禁用** `stale-while-revalidate`（RFC 语义：
+  s-maxage 隐含 proxy-revalidate），且 `max-age=0` + SWR 允许浏览器 24h 内先渲染旧 HTML——
+  旧 HTML 引用的 hashed chunk 在新部署后可能已不存在，会白屏。
 
 #### Cloudflare Pages
 

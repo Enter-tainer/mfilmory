@@ -99,6 +99,7 @@ viewport 是 1258×566，脚本会设成 1440×900 并把实测值写进 `.viewp
 | `check-daisyui-utilities.mjs` | 按「类名位置」精确扫 daisyui 的组件/工具类有没有被真正使用（`Array.prototype.join` 之类的同名 API 不算）。 |
 | `check-plugins-typecheck.mjs` | 临时把 `apps/web/plugins` 纳入 type-check 跑一遍 —— `tsconfig.json` 默认不含它，插件里的类型错误只有 CI/构建才可能发现。 |
 | `check-block-comments.mjs` | 扫「块注释里出现 `*/`」的情况。典型踩法：在 `/** … */` 里写 glob 如 `plugins/**/*`，其中的 `*/` 会提前闭合注释，后面一串中文被当代码解析，报一堆 TS1005/TS1109。 |
+| `check-inline-css.mjs` | 主 CSS 内联的**差分**断言（详见下一节）。 |
 | `make-broken-dist.mjs` | 造一份「故意砍掉 location + 16 个 exif 字段」的产物，验证 `probe-manifest-fields.mjs` 真的有牙（它必须失败）。 |
 
 ## 已知的测量陷阱（都踩过）
@@ -122,3 +123,34 @@ viewport 是 1258×566，脚本会设成 1440×900 并把实测值写进 `.viewp
 
 需要 `agent-browser`（浏览器自动化 CLI）与 Node 18+。Windows 上 `agent-browser` 是 `.CMD`
 包装器，脚本里已经处理好（`eval` 走 `--stdin` 避免 shell 转义问题）。
+
+## 主 CSS 内联的差分断言 —— `check-inline-css.mjs`
+
+```bash
+# 1) 正常构建（内联）
+pnpm --filter @afilmory/web exec vite build
+
+# 2) 参照构建（不内联）：插件读环境变量 INLINE_MAIN_CSS=0
+  # PowerShell:  $env:INLINE_MAIN_CSS='0'
+  # bash:        INLINE_MAIN_CSS=0
+pnpm --filter @afilmory/web exec vite build --outDir <refDist>
+
+# 3) 断言
+node scripts/perf/check-inline-css.mjs apps/web/dist <refDist>
+```
+
+断言四件事：
+
+1. 主 CSS 已从 `dist/assets/` 消失（不是复制了一份）；
+2. HTML 里没有残留指向主 CSS 的 `<link>`；
+3. **没有任何 chunk 或 asset 还引用被删掉的 CSS 文件名** —— 这是 `__vite__mapDeps` 那条
+   「懒加载路由去请求一个不存在的文件」路径的防线。Cloudflare Pages 对缺失资源返回
+   `200 text/html` 而不是 404，所以这种问题**不会报错、只会白下载整份 SPA shell**；
+4. **内联进 HTML 的那段 CSS 与参照产物里那份 CSS 逐字节一致** —— 证明
+   `vite.config.ts` 的 `minifyCSS: false` 生效、clean-css 没有把内联内容再压一遍。
+
+第 4 条为什么必须是差分、不能写死 token 计数：写死 `@scope` 计数会在另一个 PR 合法地把
+那段 CSS 从产物里去掉时误报（实测发生过 —— 把 DaisyUI 的 `join` utility 移出
+`include:` 白名单后 `@scope` 自然就没了，而产物是对的）。
+
+只传一个参数时退化成 1-3 条结构检查，并会明确提示「跳过了内容差分」。
