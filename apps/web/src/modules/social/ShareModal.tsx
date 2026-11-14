@@ -224,7 +224,6 @@ const ShareSheet: ModalComponent<ShareSheetProps> = ({ photo, blobSrc, dismiss }
         <div
           className={clsxm(
             'grid gap-2',
-            actionColumns === 7 && 'grid-cols-7',
             actionColumns === 6 && 'grid-cols-6',
             actionColumns === 5 && 'grid-cols-5',
           )}

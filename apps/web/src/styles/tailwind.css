@@ -18,8 +18,9 @@
      utilities  = join, glass, radius, typography
    `join` / `glass` / `radius` / `typography` 都是 **utilities**（不是 base）：它们只产出
    `.join*` / `.glass` / `.rounded-box` `-field` `-selector` / `.prose` 这些类，
-   全仓按「类名位置」精确扫描 278 个文件、命中 0 处（`.join` 的 37 处命中全是
-   `Array.prototype.join`，`radius-lg` 是 Tailwind 自己的 `--radius-*` 变量，不是这两个东西）。
+   `node scripts/perf/check-daisyui-utilities.mjs` 按「类名位置」精确扫当前全部源码文件、
+   命中 0 处（`.join` 的命中全是 `Array.prototype.join`，`radius-lg` 是 Tailwind 自己的
+   `--radius-*` 变量，不是这两个东西）。文件数会随裁剪变化，以脚本打印为准。
 
    ⚠️ 这个白名单是**手工维护**的：将来真要用 daisyui 的组件类（`btn` / `card` / `modal` …）
    或上面那四个 utilities，必须先把对应项加回 `include:`，否则样式静默不生效、构建不报错。 */

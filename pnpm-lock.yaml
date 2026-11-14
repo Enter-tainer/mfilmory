@@ -435,9 +435,6 @@ importers:
       '@iconify-json/mingcute':
         specifier: 'catalog:'
         version: 1.2.8
-      '@iconify-json/simple-icons':
-        specifier: 1.2.100
-        version: 1.2.100
       '@tailwindcss/postcss':
         specifier: 'catalog:'
         version: 4.3.3
@@ -1842,9 +1839,6 @@ packages:
 
   '@iconify-json/mingcute@1.2.8':
     resolution: {integrity: sha512-J8VXpRwTpx5yzOzyhx3T4IXnfXIKTWFl3rZ9okcW4c+NMMuwkLvdmM4rkjB83tnYIhg5+kkeMpmw8tvSnxd4rQ==}
-
-  '@iconify-json/simple-icons@1.2.100':
-    resolution: {integrity: sha512-536pN2RCEQyy5bYwzayrs4e9egr8cmtVcbdSHLaQl/ULUsihzn1eZ0+Hhn50zgz9cbEotiynKsKQSEjFJ7qKmw==}
 
   '@iconify/types@2.0.0':
     resolution: {integrity: sha512-+wluvCrRhXrhyOmRDJ3q8mux9JkKy5SJ/v8ol2tu4FVjyYvtEzkc/3pK15ET6RKg4b4w4BmTk1+gsCUhf21Ykg==}
@@ -9781,10 +9775,6 @@ snapshots:
   '@iarna/toml@2.2.5': {}
 
   '@iconify-json/mingcute@1.2.8':
-    dependencies:
-      '@iconify/types': 2.0.0
-
-  '@iconify-json/simple-icons@1.2.100':
     dependencies:
       '@iconify/types': 2.0.0
 

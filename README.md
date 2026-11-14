@@ -14,7 +14,7 @@
 | `apps/web` | Vite 8 + React 19 单页应用 —— 画廊 UI、查看器、地图、i18n、PWA manifest |
 | `packages/builder` | 照片流水线 CLI：S3 / 本地 / GitHub / Eagle 同步 → EXIF / 缩略图 / blurhash → `photos-manifest.json` |
 | `packages/data` | `PhotoLoader`，把注入的 manifest 包装成查询结构 |
-| `packages/{typing,ui,hooks,utils,sdk,viewer-motion,webgl-viewer}` | SPA 依赖的共享包（WebGL 查看器、视图动效、UI 原语等） |
+| `packages/{typing,ui,hooks,utils,viewer-motion,webgl-viewer}` | SPA 依赖的共享包（WebGL 查看器、视图动效、UI 原语等）；`packages/sdk` 仍保留但 SPA 已不依赖（见下） |
 | `locales/app` | SPA 文案（en / zh-CN / zh-HK / zh-TW / jp / ko） |
 | `site.config.ts` + `config.json` | 站点展示配置（站名、作者、主题色、地图） |
 | `builder.config.ts` + `.env` | 照片来源与凭据（S3 兼容存储 / 本地目录） |
