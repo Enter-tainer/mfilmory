@@ -4,6 +4,12 @@ import path from 'node:path'
 import { SUPPORTED_FORMATS } from '../../constants/index.js'
 import { logger } from '../../logger/index.js'
 import type { B2Config, ProgressCallback, StorageObject, StorageProvider, StorageUploadOptions } from '../interfaces.js'
+import {
+  resolveRetryOptions,
+  StorageHttpError,
+  uploadAbortSignal,
+  withRetry,
+} from './retry.js'
 
 const B2_AUTHORIZE_URL = 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account'
 const DEFAULT_AUTH_TTL_MS = 1000 * 60 * 60 * 23 // refresh slightly before the 24h expiry
@@ -405,7 +411,7 @@ export class B2StorageProvider implements StorageProvider {
 
     if (!response.ok) {
       const body = await response.text().catch(() => '')
-      throw new Error(formatB2Error(response.status, body))
+      throw new StorageHttpError(response.status, formatB2Error(response.status, body))
     }
 
     const arrayBuffer = await response.arrayBuffer()
@@ -431,6 +437,7 @@ export class B2StorageProvider implements StorageProvider {
         'X-Bz-Content-Sha1': sha1,
       },
       body: data as unknown as BodyInit,
+      signal: uploadAbortSignal(resolveRetryOptions(this.config).uploadTimeoutMs),
     })
 
     const text = await response.text()
@@ -440,7 +447,7 @@ export class B2StorageProvider implements StorageProvider {
     }
 
     if (!response.ok) {
-      throw new Error(formatB2Error(response.status, text))
+      throw new StorageHttpError(response.status, formatB2Error(response.status, text))
     }
 
     return text ? (JSON.parse(text) as B2FileInfo) : { fileName: remoteKey, fileId: '', contentLength: data.byteLength }
@@ -481,9 +488,15 @@ export class B2StorageProvider implements StorageProvider {
 
   async getFile(key: string): Promise<Buffer | null> {
     const remoteKey = this.toRemoteKey(key)
+    const retry = resolveRetryOptions(this.config)
+
     try {
       logger.b2.info(`下载文件：${remoteKey}`)
-      return await this.downloadFile(remoteKey)
+      return await withRetry(() => this.downloadFile(remoteKey), {
+        ...retry,
+        label: `下载 ${remoteKey}`,
+        logger: logger.b2,
+      })
     } catch (error) {
       logger.b2.error(`下载失败：${remoteKey}`, error)
       return null
@@ -577,12 +590,20 @@ export class B2StorageProvider implements StorageProvider {
 
   async uploadFile(key: string, data: Buffer, options?: StorageUploadOptions): Promise<StorageObject> {
     const remoteKey = this.toRemoteKey(key)
-    const file = await this.uploadInternal(remoteKey, data, options)
-    const storageObject = this.toStorageObject({ ...file, fileName: remoteKey, contentLength: data.byteLength })
-    if (!storageObject) {
-      throw new Error(`上传成功但无法转换为存储对象：${remoteKey}`)
-    }
-    return storageObject
+    const retry = resolveRetryOptions(this.config)
+
+    return await withRetry(async () => {
+      const file = await this.uploadInternal(remoteKey, data, options)
+      const storageObject = this.toStorageObject({ ...file, fileName: remoteKey, contentLength: data.byteLength })
+      if (!storageObject) {
+        throw new Error(`上传成功但无法转换为存储对象：${remoteKey}`)
+      }
+      return storageObject
+    }, {
+      ...retry,
+      label: `上传 ${remoteKey}`,
+      logger: logger.b2,
+    })
   }
 
   async moveFile(sourceKey: string, targetKey: string, options?: StorageUploadOptions): Promise<StorageObject> {

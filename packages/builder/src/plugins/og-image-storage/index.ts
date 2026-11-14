@@ -13,6 +13,7 @@ import type { S3CompatibleConfig, StorageConfig } from '../../storage/interfaces
 import type { ThumbnailPluginData } from '../thumbnail-storage/shared.js'
 import { MEDIA_CACHE_CONTROL, PREVIEW_PLUGIN_DATA_KEY, THUMBNAIL_PLUGIN_DATA_KEY } from '../thumbnail-storage/shared.js'
 import type { BuilderPlugin } from '../types.js'
+import { recordUploadFailure } from '../upload-failure.js'
 import { PHOTO_OG_WEBP_QUALITY, renderPhotoOgImage } from './photo-og.js'
 import type { CloudflareMiddlewareVendorConfig } from './vendors/cloudflare-moddleware.js'
 import { CloudflareMiddlewareVendor } from './vendors/cloudflare-moddleware.js'
@@ -305,6 +306,7 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
             }
             catch (error) {
               logger.main.error(`OG image plugin: failed to upload ${remoteKey}`, error)
+              recordUploadFailure(item, 'og-image', error)
               return
             }
           }
@@ -326,6 +328,7 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
         }
         catch (error) {
           logger.main.error(`OG image plugin: failed to render OG image for ${item.id}`, error)
+          recordUploadFailure(item, 'og-image', error)
         }
       },
       afterBuild: async ({ logger }) => {

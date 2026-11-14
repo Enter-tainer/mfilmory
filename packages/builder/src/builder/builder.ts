@@ -41,6 +41,8 @@ export interface BuilderResult {
   skippedCount: number
   deletedCount: number
   totalPhotos: number
+  /** 本次结束后仍有产物上传失败的照片数；这些照片下一次增量构建会自动重试。 */
+  uploadFailedCount: number
 }
 
 export interface BuildProgressStartPayload {
@@ -178,6 +180,7 @@ export class AfilmoryBuilder {
           skippedCount: 0,
           deletedCount: 0,
           totalPhotos: 0,
+          uploadFailedCount: 0,
         }
 
         await this.emitPluginEvent(runState, 'afterBuild', {
@@ -510,6 +513,19 @@ export class AfilmoryBuilder {
       }
 
       const hasUpdates = newCount > 0 || processedCount > 0 || deletedCount > 0
+
+      const uploadFailedItems = manifest.filter(item => item.lastProcessSuccess === false)
+      const uploadFailedCount = uploadFailedItems.length
+      if (uploadFailedCount > 0) {
+        logger.main.warn(`⚠ ${uploadFailedCount} 张照片仍有产物上传失败；已写入 manifest，下一次增量构建会自动重试`)
+        for (const item of uploadFailedItems.slice(0, 20)) {
+          logger.main.warn(`  - ${item.id}: ${item.uploadFailures?.slice(-3).join('; ') ?? '未知错误'}`)
+        }
+        if (uploadFailedCount > 20) {
+          logger.main.warn(`  … 另有 ${uploadFailedCount - 20} 张，详见 manifest 的 uploadFailures`)
+        }
+      }
+
       const result: BuilderResult = {
         hasUpdates,
         newCount,
@@ -517,6 +533,7 @@ export class AfilmoryBuilder {
         skippedCount,
         deletedCount,
         totalPhotos: manifest.length,
+        uploadFailedCount,
       }
 
       await this.emitPluginEvent(runState, 'afterBuild', {
@@ -772,6 +789,12 @@ export class AfilmoryBuilder {
 
       // 新图片需要处理
       if (!existingItem) {
+        tasksToProcess.push(obj)
+        continue
+      }
+
+      // 上次有产物没上传成功：即使文件没变也要重试
+      if (existingItem.lastProcessSuccess === false || (existingItem.uploadFailures?.length ?? 0) > 0) {
         tasksToProcess.push(obj)
         continue
       }

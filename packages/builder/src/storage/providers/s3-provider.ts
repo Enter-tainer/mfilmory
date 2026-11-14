@@ -14,6 +14,13 @@ import type {
   StorageUploadOptions,
 } from '../interfaces'
 import { S3ProviderClient } from './s3-client.js'
+import {
+  isRetryableError,
+  resolveRetryOptions,
+  StorageHttpError,
+  uploadAbortSignal,
+  withRetry,
+} from './retry.js'
 import { sanitizeS3Etag } from './s3-utils.js'
 
 // 将 AWS S3 对象转换为通用存储对象
@@ -173,56 +180,63 @@ export class S3StorageProvider implements StorageProvider {
   }
 
   async getFile(key: string): Promise<Buffer | null> {
-    return await this.limiter.run(async () => {
-      const maxAttempts = this.config.maxAttempts ?? 3
-      const totalTimeoutMs = this.config.totalTimeoutMs ?? 60_000
-      const idleTimeoutMs = this.config.idleTimeoutMs ?? 10_000
+    const { maxAttempts, baseDelayMs, maxDelayMs } = resolveRetryOptions(this.config)
 
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        const startTime = Date.now()
-        const controller = new AbortController()
-        const totalTimer = setTimeout(() => controller.abort(), totalTimeoutMs)
-
-        try {
-          logger.s3.info(`下载开始：${key} (attempt ${attempt}/${maxAttempts})`)
-
-          const response = await this.client.getObject(key, {
-            signal: controller.signal,
-          })
-
-          if (!response.ok || !response.body) {
-            const bodyText = await response.text().catch(() => '')
-            logger.s3.error(`S3 响应异常：${key} (status ${response.status}) ${formatS3ErrorBody(bodyText)}`)
-            logger.s3.error(bodyText)
-            return null
-          }
-
-          const { buffer, firstByteAt } = await this.readStreamWithIdleTimeout(response, controller, idleTimeoutMs)
-          clearTimeout(totalTimer)
-
-          const duration = Date.now() - startTime
-          const ttfb = firstByteAt ? firstByteAt - startTime : duration
-          const sizeKB = Math.round(buffer.length / 1024)
-          logger.s3.success(`下载完成：${key} (${sizeKB}KB, ${duration}ms, TTFB ${ttfb}ms, attempt ${attempt})`)
-          return buffer
-        } catch (error) {
-          const elapsed = Date.now() - startTime
-          logger.s3.warn(`下载失败：${key} (attempt ${attempt}/${maxAttempts}, ${elapsed}ms)`, error)
-          clearTimeout(totalTimer)
-
-          if (attempt < maxAttempts) {
-            const delay = backoffDelay(attempt)
-            logger.s3.info(`等待 ${delay}ms 后重试：${key}`)
-            await sleep(delay)
-            continue
-          }
-          logger.s3.error(`下载最终失败：${key}`)
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        // Acquire the download permit per attempt; the backoff sleep below stays
+        // outside the permit so a retrying download doesn't block the pool.
+        return await this.limiter.run(() => this.getFileOnce(key, attempt, maxAttempts))
+      }
+      catch (error) {
+        if (attempt >= maxAttempts || !isRetryableError(error)) {
+          logger.s3.error(`下载最终失败：${key}`, error)
           return null
         }
+
+        const delay = backoffDelay(attempt, baseDelayMs, maxDelayMs)
+        logger.s3.warn(`下载失败：${key} (attempt ${attempt}/${maxAttempts})`)
+        logger.s3.info(`等待 ${delay}ms 后重试：${key}`)
+        await sleep(delay)
+      }
+    }
+
+    return null
+  }
+
+  private async getFileOnce(key: string, attempt: number, maxAttempts: number): Promise<Buffer> {
+    const totalTimeoutMs = this.config.totalTimeoutMs ?? 60_000
+    const idleTimeoutMs = this.config.idleTimeoutMs ?? 10_000
+    const startTime = Date.now()
+    const controller = new AbortController()
+    const totalTimer = setTimeout(() => controller.abort(), totalTimeoutMs)
+
+    try {
+      logger.s3.info(`下载开始：${key} (attempt ${attempt}/${maxAttempts})`)
+
+      const response = await this.client.getObject(key, {
+        signal: controller.signal,
+      })
+
+      if (!response.ok || !response.body) {
+        const bodyText = await response.text().catch(() => '')
+        throw new StorageHttpError(
+          response.status,
+          `S3 响应异常：${key} (status ${response.status}) ${formatS3ErrorBody(bodyText)}`,
+        )
       }
 
-      return null
-    })
+      const { buffer, firstByteAt } = await this.readStreamWithIdleTimeout(response, controller, idleTimeoutMs)
+
+      const duration = Date.now() - startTime
+      const ttfb = firstByteAt ? firstByteAt - startTime : duration
+      const sizeKB = Math.round(buffer.length / 1024)
+      logger.s3.success(`下载完成：${key} (${sizeKB}KB, ${duration}ms, TTFB ${ttfb}ms, attempt ${attempt})`)
+      return buffer
+    }
+    finally {
+      clearTimeout(totalTimer)
+    }
   }
 
   async listImages(): Promise<StorageObject[]> {
@@ -400,6 +414,20 @@ export class S3StorageProvider implements StorageProvider {
   }
 
   async uploadFile(key: string, data: Buffer, options?: StorageUploadOptions): Promise<StorageObject> {
+    const retry = resolveRetryOptions(this.config)
+
+    return await withRetry(() => this.putObjectOnce(key, data, options), {
+      ...retry,
+      label: `上传 ${key}`,
+      logger: logger.s3,
+    })
+  }
+
+  private async putObjectOnce(
+    key: string,
+    data: Buffer,
+    options?: StorageUploadOptions,
+  ): Promise<StorageObject> {
     const headers: Record<string, string> = {
       'content-type': options?.contentType ?? 'application/octet-stream',
       'content-length': data.byteLength.toString(),
@@ -408,11 +436,20 @@ export class S3StorageProvider implements StorageProvider {
       headers['cache-control'] = options.cacheControl
     }
 
-    const response = await this.client.putObject(key, data as unknown as BodyInit, headers)
+    const { uploadTimeoutMs } = resolveRetryOptions(this.config)
+    const response = await this.client.putObject(
+      key,
+      data as unknown as BodyInit,
+      headers,
+      uploadAbortSignal(uploadTimeoutMs),
+    )
 
     if (!response.ok) {
       const text = await response.text().catch(() => '')
-      throw new Error(`上传 S3 对象失败：${key} (status ${response.status}) ${formatS3ErrorBody(text)}`)
+      throw new StorageHttpError(
+        response.status,
+        `上传 S3 对象失败：${key} (status ${response.status}) ${formatS3ErrorBody(text)}`,
+      )
     }
 
     const lastModified = new Date()
