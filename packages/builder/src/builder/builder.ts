@@ -1,10 +1,10 @@
-import path from 'node:path'
 import process from 'node:process'
 
 import type { AfilmoryManifest, CameraInfo, LensInfo, PhotoManifestItem, ProcessPhotoResult } from '@afilmory/typing'
 import { Semaphore } from '@afilmory/utils'
 
 import { flushSignatures, setSignatureBatchMode } from '../image/asset-signature.js'
+import { shutdownExiftool } from '../image/exif.js'
 import { isMediaFormatCurrent, markMediaFormatCurrent } from '../image/media-format.js'
 import { previewExists } from '../image/preview.js'
 import { thumbnailExists } from '../image/thumbnail.js'
@@ -12,6 +12,7 @@ import { logger } from '../logger/index.js'
 import { handleDeletedPhotos, loadExistingManifest, needsUpdate, saveManifest } from '../manifest/manager.js'
 import { CURRENT_MANIFEST_VERSION } from '../manifest/version.js'
 import type { BuilderRuntimePools } from '../photo/execution-context.js'
+import { computePhotoId, releasePluginDataBuffers } from '../photo/image-pipeline.js'
 import type { PhotoProcessorOptions } from '../photo/processor.js'
 import { processPhoto } from '../photo/processor.js'
 import type { PluginRunState } from '../plugins/manager.js'
@@ -36,6 +37,7 @@ export interface BuilderOptions {
   keyRegex?: string
   concurrencyLimit?: number // 可选，如果未提供则使用配置文件中的默认值
   progressListener?: BuildProgressListener
+  signal?: AbortSignal
 }
 
 export interface BuilderResult {
@@ -68,6 +70,16 @@ export interface BuildProgressListener {
   onProgress?: (snapshot: BuildProgressSnapshot) => void
   onComplete?: (summary: BuildProgressSnapshot) => void
   onError?: (error: unknown) => void
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return
+  }
+  const reason = signal.reason
+  throw reason instanceof Error
+    ? reason
+    : new Error(typeof reason === 'string' ? reason : '构建已取消')
 }
 
 export class AfilmoryBuilder {
@@ -128,6 +140,8 @@ export class AfilmoryBuilder {
     let deletedCount = 0
 
     try {
+      throwIfAborted(options.signal)
+
       await this.emitPluginEvent(runState, 'beforeBuild', {
         options,
       })
@@ -161,6 +175,8 @@ export class AfilmoryBuilder {
         allObjects,
       })
 
+      throwIfAborted(options.signal)
+
       // 检测 Live Photo 配对（如果启用）
       const livePhotoMap = await this.detectLivePhotos(allObjects)
       if (this.config.system.processing.enableLivePhotoDetection) {
@@ -171,6 +187,8 @@ export class AfilmoryBuilder {
         options,
         livePhotoMap,
       })
+
+      throwIfAborted(options.signal)
 
       // 列出存储中的所有图片文件
       const listedImageObjects = await storageManager.listImages()
@@ -184,6 +202,8 @@ export class AfilmoryBuilder {
         options,
         imageObjects,
       })
+
+      throwIfAborted(options.signal)
 
       if (imageObjects.length === 0) {
         logger.main.error('❌ 没有找到需要处理的照片')
@@ -207,6 +227,8 @@ export class AfilmoryBuilder {
 
       // 创建存储中存在的图片 key 集合，用于检测已删除的图片
       const s3ImageKeys = new Set(imageObjects.map(obj => obj.key))
+
+      throwIfAborted(options.signal)
 
       // 筛选出实际需要处理的图片
       let tasksToProcess = await this.filterTaskImages(imageObjects, existingManifestMap, options)
@@ -250,16 +272,17 @@ export class AfilmoryBuilder {
         sharpConcurrency: processing.sharpConcurrency,
         cpuWorkerCount: processing.cpuWorkerCount,
         taskCount: tasksToProcess.length,
+        signal: options.signal,
       })
 
+      const toPositiveInt = (value: unknown): number | undefined =>
+        typeof value === 'number' && Number.isFinite(value) && value > 0
+          ? Math.max(1, Math.floor(value))
+          : undefined
       const storageDownload
-        = 'downloadConcurrency' in storageConfig && typeof storageConfig.downloadConcurrency === 'number'
-          ? storageConfig.downloadConcurrency
-          : undefined
+        = 'downloadConcurrency' in storageConfig ? toPositiveInt(storageConfig.downloadConcurrency) : undefined
       const storageUpload
-        = 'uploadConcurrency' in storageConfig && typeof storageConfig.uploadConcurrency === 'number'
-          ? storageConfig.uploadConcurrency
-          : undefined
+        = 'uploadConcurrency' in storageConfig ? toPositiveInt(storageConfig.uploadConcurrency) : undefined
       const networkPool = new NetworkPool({
         downloadConcurrency: storageDownload ?? processing.networkConcurrency,
         uploadConcurrency: storageUpload ?? processing.networkConcurrency,
@@ -281,6 +304,11 @@ export class AfilmoryBuilder {
         })
 
         if (tasksToProcess.length === 0) {
+          progressListener?.onStart?.({
+            total: 0,
+            mode: cpuPool.plan.mode,
+            concurrency: cpuPool.plan.cpuSlots,
+          })
           logger.main.info('💡 没有需要处理的照片，使用现有 manifest')
           for (const item of existingManifestItems) {
             if (!s3ImageKeys.has(item.s3Key)) {
@@ -296,6 +324,7 @@ export class AfilmoryBuilder {
             })
 
             manifest.push(normalizedItem)
+            skippedCount++
           }
         }
         else {
@@ -351,6 +380,7 @@ export class AfilmoryBuilder {
             `开始处理任务：CPU 池=${cpuPool.plan.mode === 'cpu-worker' ? `子进程(${cpuPool.plan.workerCount}进程/${cpuPool.plan.cpuSlots}槽/sharp=${cpuPool.plan.sharpConcurrency})` : `同进程(${cpuPool.plan.cpuSlots}槽/sharp=${cpuPool.plan.sharpConcurrency})`}，网络池=↓${networkPool.downloadConcurrency}/↑${networkPool.uploadConcurrency}`,
           )
 
+          throwIfAborted(options.signal)
           await cpuPool.start()
 
           const legacyLivePhotoMap = new Map<string, { Key: string, Size?: number, LastModified?: Date, ETag?: string }>()
@@ -363,13 +393,19 @@ export class AfilmoryBuilder {
             })
           }
 
-          // 预取缓冲区（Stage 1）适度超前 CPU 槽位 +4：网络下载完即进入 ExifTool + CPU 池，
-          // 随后立即释放 gate 并丢弃原图大 Buffer，不让后续上传/逆地理编码占住前段并发。
+          // Stage 1（下载 + EXIF + CPU 处理）超前 CPU 槽位 +4；进入 Stage 2（插件上传 / OG 渲染）前先取 stage2Gate，
+          // 确保慢上传时不会无限堆积已完成的缩略图/占位图大 Buffer。
           const stage1Gate = new Semaphore(cpuPool.plan.cpuSlots + 4)
+          const stage2Gate = new Semaphore(Math.max(4, networkPool.uploadConcurrency * 2))
+          const acquireStage2Gate = () => stage2Gate.acquire()
           let nextWorkerSeq = 0
 
-          const results = await Promise.all(
+          const settledResults = await Promise.allSettled(
             tasksToProcess.map(async (obj, taskIndex) => {
+              if (options.signal?.aborted) {
+                return null
+              }
+
               const workerId = (nextWorkerSeq++ % Math.max(1, cpuPool.plan.cpuSlots)) + 1
               const legacyObj = {
                 Key: obj.key,
@@ -379,6 +415,11 @@ export class AfilmoryBuilder {
               }
 
               const release = await stage1Gate.acquire()
+              if (options.signal?.aborted) {
+                release()
+                return null
+              }
+
               let released = false
               const releaseStage1Gate = () => {
                 if (!released) {
@@ -402,6 +443,7 @@ export class AfilmoryBuilder {
                     builderOptions: options,
                     pools: runtimePools,
                     releaseStage1Gate,
+                    acquireStage2Gate,
                   },
                 )
                 applyResultCounters(result)
@@ -415,13 +457,30 @@ export class AfilmoryBuilder {
             }),
           )
 
-          for (const result of results) {
-            processingResults.push({
-              item: result.item,
-              type: result.type,
-            })
+          const firstRejected = settledResults.find(
+            (entry): entry is PromiseRejectedResult => entry.status === 'rejected',
+          )
+          if (firstRejected) {
+            throw firstRejected.reason
+          }
 
+          throwIfAborted(options.signal)
+
+          const manifestKeySet = new Set<string>()
+          for (const entry of settledResults) {
+            if (entry.status !== 'fulfilled' || !entry.value) {
+              continue
+            }
+
+            const result = entry.value
             if (!result.item) {
+              if (result.pluginData) {
+                releasePluginDataBuffers(result.pluginData)
+              }
+              processingResults.push({
+                item: null,
+                type: result.type,
+              })
               continue
             }
 
@@ -434,7 +493,33 @@ export class AfilmoryBuilder {
               resultType: result.type,
             })
 
+            if (result.pluginData) {
+              releasePluginDataBuffers(result.pluginData)
+            }
+
+            processingResults.push({
+              item: normalizedItem,
+              type: result.type,
+            })
             manifest.push(normalizedItem)
+            manifestKeySet.add(normalizedItem.s3Key)
+          }
+
+          for (const [key, item] of existingManifestMap) {
+            if (s3ImageKeys.has(key) && !manifestKeySet.has(key)) {
+              const normalizedItem = this.normalizeManifestItem(item, xmpSettings)
+
+              await this.emitPluginEvent(runState, 'beforeAddManifestItem', {
+                options,
+                item: normalizedItem,
+                pluginData: {},
+                resultType: 'skipped',
+              })
+
+              manifest.push(normalizedItem)
+              manifestKeySet.add(key)
+              skippedCount++
+            }
           }
 
           completedTaskCount = Math.max(completedTaskCount, totalTasks)
@@ -447,22 +532,6 @@ export class AfilmoryBuilder {
             skippedCount,
             failedCount,
           })
-
-          for (const [key, item] of existingManifestMap) {
-            if (s3ImageKeys.has(key) && !manifest.some(m => m.s3Key === key)) {
-              const normalizedItem = this.normalizeManifestItem(item, xmpSettings)
-
-              await this.emitPluginEvent(runState, 'beforeAddManifestItem', {
-                options,
-                item: normalizedItem,
-                pluginData: {},
-                resultType: 'skipped',
-              })
-
-              manifest.push(normalizedItem)
-              skippedCount++
-            }
-          }
         }
 
         if (tasksToProcess.length === 0 && progressListener) {
@@ -475,6 +544,8 @@ export class AfilmoryBuilder {
             failedCount,
           })
         }
+
+        throwIfAborted(options.signal)
 
         // 全部照片都处理成功才把「格式版本」落盘：中途失败或 --dry-run 时不写，
         // 下次构建会继续按「版本不符」重新排队（幂等，最多多编一次）。
@@ -497,9 +568,12 @@ export class AfilmoryBuilder {
       finally {
         this.runtimePools = undefined
         await cpuPool.close()
+        await shutdownExiftool()
         setSignatureBatchMode(false)
         await flushSignatures()
       }
+
+      throwIfAborted(options.signal)
 
       // 检测并处理已删除的图片
       if (!options.dryRun) {
@@ -818,10 +892,11 @@ export class AfilmoryBuilder {
     }
 
     const tasksToProcess: Awaited<ReturnType<StorageManager['listImages']>> = []
+    const { digestSuffixLength } = this.config.system.processing
 
     for (const obj of imageObjects) {
       const { key } = obj
-      const photoId = path.basename(key, path.extname(key))
+      const photoId = computePhotoId(key, digestSuffixLength)
       const existingItem = existingManifestMap.get(key)
 
       // 新图片需要处理
@@ -880,7 +955,14 @@ export class AfilmoryBuilder {
       return imageObjects
     }
 
-    const pattern = new RegExp(keyRegex, 'i')
+    let pattern: RegExp
+    try {
+      pattern = new RegExp(keyRegex, 'i')
+    }
+    catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      throw new Error(`无效的 --key-regex 正则表达式 "${keyRegex}": ${detail}`)
+    }
 
     return imageObjects.filter(item => pattern.test(item.key))
   }

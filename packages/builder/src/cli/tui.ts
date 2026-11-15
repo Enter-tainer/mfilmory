@@ -1,3 +1,4 @@
+import process from 'node:process'
 import { format as utilFormat } from 'node:util'
 
 import type {
@@ -54,14 +55,18 @@ export class BuilderTUI {
   }
 
   attach(): void {
-    if (this.isAttached) { return }
+    if (this.isAttached) {
+      return
+    }
     this.isAttached = true
     this.hideCursor()
     this.render(true)
   }
 
   detach(): void {
-    if (!this.isAttached) { return }
+    if (!this.isAttached) {
+      return
+    }
     this.clearScreen()
     this.showCursor()
     this.isAttached = false
@@ -84,7 +89,7 @@ export class BuilderTUI {
   handleLog(message: LogMessage): void {
     const timestamp = formatTime(message.timestamp)
     const levelLabel = formatLevel(message.level)
-    const formatted = utilFormat(...(message.args as any[]))
+    const formatted = utilFormat(...(message.args as unknown[]))
     const line = `${color(timestamp, 'gray')} ${levelLabel} ${color(`[${message.tag}]`, 'blue')} ${formatted}`
     this.state.logs = [...this.state.logs, line].slice(-MAX_LOG_LINES)
     this.render()
@@ -141,7 +146,9 @@ export class BuilderTUI {
   }
 
   private render(force = false): void {
-    if (!this.isAttached) { return }
+    if (!this.isAttached) {
+      return
+    }
 
     const frame = this.composeFrame()
     if (!force && frame === this.lastFrame) {
@@ -181,7 +188,7 @@ export class BuilderTUI {
       `并发: ${color(String(meta.concurrency), 'green')}`,
     ]
     const header = parts.join(' · ')
-    return header.length > columns ? header.slice(0, columns - 1) : header
+    return truncateAnsi(header, columns - 1)
   }
 
   private composeProgress(columns: number): string {
@@ -327,4 +334,56 @@ function truncateMiddle(value: string, maxLength: number): string {
   }
   const half = Math.max(1, Math.floor((limit - 1) / 2))
   return `${value.slice(0, half)}…${value.slice(value.length - half)}`
+}
+
+function isWideCodePoint(codePoint: number): boolean {
+  return (
+    codePoint >= 0x1100
+    && (codePoint <= 0x115F
+      || codePoint === 0x2329
+      || codePoint === 0x232A
+      || (codePoint >= 0x2E80 && codePoint <= 0xA4CF && codePoint !== 0x303F)
+      || (codePoint >= 0xAC00 && codePoint <= 0xD7A3)
+      || (codePoint >= 0xF900 && codePoint <= 0xFAFF)
+      || (codePoint >= 0xFE10 && codePoint <= 0xFE19)
+      || (codePoint >= 0xFE30 && codePoint <= 0xFE6F)
+      || (codePoint >= 0xFF00 && codePoint <= 0xFF60)
+      || (codePoint >= 0xFFE0 && codePoint <= 0xFFE6)
+      || codePoint >= 0x1F300)
+  )
+}
+
+function truncateAnsi(value: string, maxColumns: number): string {
+  const limit = Math.max(1, maxColumns)
+  let out = ''
+  let visible = 0
+  let hasAnsi = false
+  let i = 0
+
+  while (i < value.length) {
+    if (value[i] === '\u001B' && value[i + 1] === '[') {
+      const end = value.indexOf('m', i + 2)
+      if (end !== -1) {
+        out += value.slice(i, end + 1)
+        hasAnsi = true
+        i = end + 1
+        continue
+      }
+    }
+
+    const codePoint = value.codePointAt(i)
+    if (codePoint === undefined) {
+      break
+    }
+    const char = String.fromCodePoint(codePoint)
+    const width = isWideCodePoint(codePoint) ? 2 : 1
+    if (visible + width > limit) {
+      break
+    }
+    out += char
+    visible += width
+    i += char.length
+  }
+
+  return hasAnsi ? `${out}\u001B[0m` : out
 }

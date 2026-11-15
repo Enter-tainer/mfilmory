@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 
 import type { ImageMetadata, ToneAnalysis } from '@afilmory/typing'
+import type { Sharp } from 'sharp'
 import sharp from 'sharp'
 
 import { generateBlurhash } from '../image/blurhash.js'
@@ -40,6 +41,22 @@ export interface CpuPhotoTaskOutput {
   toneAnalysis: ToneAnalysis | null
 }
 
+async function decodeToSharpInput(
+  rawBuffer: Buffer,
+  photoKey: string,
+  limitInputPixels?: number | boolean,
+): Promise<{ imageBuffer: Buffer, sharpInstance: Sharp }> {
+  let imageBuffer = await preprocessImageBuffer(rawBuffer, photoKey)
+  let sharpInstance = sharp(imageBuffer, { limitInputPixels })
+
+  if (isBitmap(imageBuffer)) {
+    sharpInstance = await convertBmpToJpegSharpInstance(imageBuffer, limitInputPixels)
+    imageBuffer = await sharpInstance.toBuffer()
+  }
+
+  return { imageBuffer, sharpInstance }
+}
+
 /**
  * 纯 CPU 照片处理任务（解码 / 旋转 / 缩放 / AVIF 编码 / Blurhash / 影调直方图）。
  * 不包含任何存储网络请求、ExifTool、地理编码或磁盘产物写入，可在子进程安全执行。
@@ -61,13 +78,11 @@ export async function runPhotoCpuTask(input: CpuPhotoTaskInput): Promise<CpuPhot
       throw new Error(`CPU task missing raw input for ${input.photoKey}`)
     }
 
-    let imageBuffer = await preprocessImageBuffer(rawBuffer, input.photoKey)
-    let sharpInstance = sharp(imageBuffer, { limitInputPixels: input.limitInputPixels })
-
-    if (isBitmap(imageBuffer)) {
-      sharpInstance = await convertBmpToJpegSharpInstance(imageBuffer)
-      imageBuffer = await sharpInstance.toBuffer()
-    }
+    const { imageBuffer, sharpInstance } = await decodeToSharpInput(
+      rawBuffer,
+      input.photoKey,
+      input.limitInputPixels,
+    )
 
     if (input.needMetadata) {
       metadata = await getImageMetadataWithSharp(sharpInstance)
@@ -94,8 +109,23 @@ export async function runPhotoCpuTask(input: CpuPhotoTaskInput): Promise<CpuPhot
   }
 
   if (!input.needThumbnail && input.needBlurhash && input.existingThumbnailPath) {
-    const existingThumbBuffer = await fs.readFile(input.existingThumbnailPath)
-    thumbHash = await generateBlurhash(existingThumbBuffer, input.limitInputPixels)
+    try {
+      const existingThumbBuffer = await fs.readFile(input.existingThumbnailPath)
+      thumbHash = await generateBlurhash(existingThumbBuffer, input.limitInputPixels)
+    }
+    catch {
+      const rawBuffer = input.rawBuffer ?? (input.rawFilePath ? await fs.readFile(input.rawFilePath) : null)
+      if (rawBuffer) {
+        const { imageBuffer: fallbackImageBuffer } = await decodeToSharpInput(
+          rawBuffer,
+          input.photoKey,
+          input.limitInputPixels,
+        )
+        const fallbackThumbBuffer = await encodeThumbnailBuffer(fallbackImageBuffer, input.limitInputPixels)
+        thumbnailBuffer = fallbackThumbBuffer
+        thumbHash = await generateBlurhash(fallbackThumbBuffer, input.limitInputPixels)
+      }
+    }
   }
 
   return {

@@ -95,7 +95,7 @@ git grep -n "<pattern>" -- ':!node_modules' ':!apps/web/dist'
 
 ## 已知遗留 / 下一步
 
-- **`--dry-run` 的计数不可信（会偏高）**：`packages/builder/src/builder/builder.ts:87` 在 `dryRun` 时跳过 `ensurePluginsReady()`，于是 thumbnail / og-image 插件注册的 `.afilmory/thumbnails/`、`.afilmory/og-images/` 排除前缀不生效，桶里已生成的缩略图和 OG 图会被当成"照片"（实测对 369 张的库会虚报成 1110 张、要求处理 741 张）。真实构建（不加 `--dry-run`）会排除这些生成物，实测扫描结果 382 个文件 → 369 张照片 → 0 张需要处理。估算增量时别信 dry-run 的数字。
+- **`--dry-run` 的计数不可信（会偏高）**：`packages/builder/src/builder/builder.ts:106` 在 `dryRun` 时跳过 `ensurePluginsReady()`，于是 thumbnail / og-image 插件注册的 `.afilmory/thumbnails/`、`.afilmory/og-images/` 排除前缀不生效，桶里已生成的缩略图和 OG 图会被当成"照片"（实测对 369 张的库会虚报成 1110 张、要求处理 741 张）。真实构建（不加 `--dry-run`）会排除这些生成物，实测扫描结果 382 个文件 → 369 张照片 → 0 张需要处理。估算增量时别信 dry-run 的数字。
 
 - 分享图不再经过 Satori/resvg：`packages/renderer`（`@afilmory/og-renderer`）与 `packages/builder/assets/og` 的中文字体已随「照片直放」方案一起删掉。图片由 `og-image-storage/photo-og.ts` 用 sharp 从 2560px 占位图缩放，文案由 `photo-text.ts` 生成；要回到「设计卡片」方案得从 git 历史里取回这两块。
 - 本 fork 已同步到 `upstream/main` `cdeada39`（2026-11）。上游 `c392e065..cdeada39` 的 40 个提交全是 `apps/mobile`（+ 移动端 CI/设计文档），`apps/web`、`packages`、`locales`、`scripts` 一个文件都没动；之后上游再有 `apps/web` 改动可直接 `git cherry-pick`。

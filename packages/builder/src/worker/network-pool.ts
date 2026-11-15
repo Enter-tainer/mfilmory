@@ -16,8 +16,12 @@ export class NetworkPool {
   readonly uploadConcurrency: number
 
   constructor(options: NetworkPoolOptions) {
-    this.downloadConcurrency = Math.max(1, Math.floor(options.downloadConcurrency))
-    this.uploadConcurrency = Math.max(1, Math.floor(options.uploadConcurrency))
+    this.downloadConcurrency = Number.isFinite(options.downloadConcurrency) && options.downloadConcurrency > 0
+      ? Math.max(1, Math.floor(options.downloadConcurrency))
+      : 16
+    this.uploadConcurrency = Number.isFinite(options.uploadConcurrency) && options.uploadConcurrency > 0
+      ? Math.max(1, Math.floor(options.uploadConcurrency))
+      : 16
     this.downloadLimiter = new Semaphore(this.downloadConcurrency)
     this.uploadLimiter = new Semaphore(this.uploadConcurrency)
   }

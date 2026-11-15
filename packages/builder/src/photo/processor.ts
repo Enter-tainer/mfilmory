@@ -34,6 +34,7 @@ export async function processPhoto(
     builderOptions: BuilderOptions
     pools?: BuilderRuntimePools
     releaseStage1Gate?: () => void
+    acquireStage2Gate?: () => Promise<() => void>
   },
 ): Promise<ProcessPhotoResult> {
   const key = obj.Key

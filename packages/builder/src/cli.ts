@@ -12,16 +12,11 @@ import { AfilmoryBuilder } from './builder/index.js'
 import { loadBuilderConfig } from './config/index.js'
 import { shutdownExiftool } from './image/exif.js'
 import { logger, setLogListener } from './logger/index.js'
+import { hasCpuWorkerScript, resolveCpuPlan } from './worker/cpu-pool.js'
 
 type BuilderTUI = import('./cli/tui.js').BuilderTUI
 
 async function main() {
-  const builderConfig = await loadBuilderConfig({
-    cwd: join(fileURLToPath(import.meta.url), '../../../..'),
-  })
-  const cliBuilder = new AfilmoryBuilder(builderConfig)
-  process.title = 'photo-gallery-builder-main'
-
   // 解析命令行参数
   const args = new Set(process.argv.slice(2))
   const rawArgs = process.argv.slice(2)
@@ -35,12 +30,12 @@ async function main() {
     ?.slice('--key-regex='.length)
     .trim()
 
-  // 显示帮助信息
+  // 显示帮助信息（无需加载或校验存储配置）
   if (args.has('--help') || args.has('-h')) {
     logger.main.info(`
 照片库构建工具 (新版本 - 使用适配器模式)
 
-用法：tsx src/core/cli.ts [选项]
+用法：tsx src/cli.ts [选项]
 
 选项：
   --force              强制重新处理所有照片
@@ -49,15 +44,15 @@ async function main() {
   --dry-run            跑完整流程但只打印结果：不写 manifest / 缩略图，也不执行插件钩子（插件照常加载）
   --key-regex=REGEX    仅处理 key 匹配指定正则的照片
   --config             显示当前配置信息
-  --help, -h          显示帮助信息
-  --no-ui             使用传统日志输出（禁用 TUI）
+  --help, -h           显示帮助信息
+  --no-ui              使用传统日志输出（禁用 TUI）
 
 示例：
-  tsx src/core/cli.ts                           # 增量更新
-  tsx src/core/cli.ts --force                   # 全量更新
-  tsx src/core/cli.ts --force-thumbnails        # 强制重新生成缩略图
-  tsx src/core/cli.ts --dry-run --key-regex='DSC_6447|DSC_7132'
-  tsx src/core/cli.ts --config                  # 显示配置信息
+  tsx src/cli.ts                           # 增量更新
+  tsx src/cli.ts --force                   # 全量更新
+  tsx src/cli.ts --force-thumbnails        # 强制重新生成缩略图
+  tsx src/cli.ts --dry-run --key-regex='DSC_6447|DSC_7132'
+  tsx src/cli.ts --config                  # 显示配置信息
 
 配置：
   在 builder.config.ts 的 system.processing 中可配置：
@@ -65,6 +60,12 @@ async function main() {
 `)
     return
   }
+
+  const builderConfig = await loadBuilderConfig({
+    cwd: join(fileURLToPath(import.meta.url), '../../../..'),
+  })
+  const cliBuilder = new AfilmoryBuilder(builderConfig)
+  process.title = 'photo-gallery-builder-main'
 
   // 显示配置信息
   if (args.has('--config')) {
@@ -130,11 +131,18 @@ async function main() {
 
   const config = cliBuilder.getConfig()
   const { processing } = config.system
-  const estimatedCpuConcurrency
-    = typeof processing.cpuConcurrency === 'number' && processing.cpuConcurrency > 0
-      ? processing.cpuConcurrency
-      : os.cpus().length
-  const initialModeKey = processing.cpuWorkerCount === 0 ? 'in-process' : 'cpu-worker'
+  const initialPlan = resolveCpuPlan(
+    {
+      cpuConcurrency: processing.cpuConcurrency,
+      sharpConcurrency: processing.sharpConcurrency,
+      cpuWorkerCount: processing.cpuWorkerCount,
+      taskCount:
+        typeof processing.cpuConcurrency === 'number' && processing.cpuConcurrency > 0
+          ? processing.cpuConcurrency
+          : os.cpus().length,
+    },
+    hasCpuWorkerScript(),
+  )
 
   const useTui = process.stdout.isTTY && !disableUi
   let tui: BuilderTUI | null = null
@@ -146,8 +154,8 @@ async function main() {
     tui.attach()
     tui.setRunMetadata({
       runMode,
-      concurrency: estimatedCpuConcurrency,
-      processingMode: initialModeKey,
+      concurrency: initialPlan.cpuSlots,
+      processingMode: initialPlan.mode,
     })
     progressListener = tui.createProgressListener()
     setLogListener(message => tui?.handleLog(message), { forwardToConsole: false })
@@ -167,6 +175,23 @@ async function main() {
 
   environmentCheck()
 
+  const abortController = new AbortController()
+  let interruptSignal: NodeJS.Signals | null = null
+  const handleTerminationSignal = (sig: NodeJS.Signals) => {
+    if (interruptSignal) {
+      setLogListener(null, { forwardToConsole: true })
+      tui?.detach()
+      process.exit(sig === 'SIGINT' ? 130 : 143)
+    }
+    interruptSignal = sig
+    abortController.abort(new Error(`收到退出信号 ${sig}`))
+    logger.main.warn(`收到 ${sig}，正在等待当前任务安全收尾…（再次按下可强制退出）`)
+  }
+  const onSigint = () => handleTerminationSignal('SIGINT')
+  const onSigterm = () => handleTerminationSignal('SIGTERM')
+  process.on('SIGINT', onSigint)
+  process.on('SIGTERM', onSigterm)
+
   // 启动构建过程
   try {
     const result = await cliBuilder.buildManifest({
@@ -176,20 +201,31 @@ async function main() {
       dryRun,
       keyRegex,
       progressListener,
+      signal: abortController.signal,
     })
 
-    tui?.markSuccess(result)
+    if (!interruptSignal) {
+      tui?.markSuccess(result)
+    }
   }
   catch (error) {
-    tui?.markError(error)
-    throw error
+    if (!interruptSignal) {
+      tui?.markError(error)
+      throw error
+    }
   }
   finally {
+    process.off('SIGINT', onSigint)
+    process.off('SIGTERM', onSigterm)
     if (useTui) {
       setLogListener(null, { forwardToConsole: true })
       tui?.detach()
     }
     await shutdownExiftool()
+  }
+
+  if (interruptSignal) {
+    process.exit(interruptSignal === 'SIGINT' ? 130 : 143)
   }
 
   process.exit(0)

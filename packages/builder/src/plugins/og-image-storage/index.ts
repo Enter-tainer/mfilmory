@@ -8,6 +8,7 @@ import type { PhotoManifestItem } from '@afilmory/typing'
 import { signatureMatches, writeSignature } from '../../image/asset-signature.js'
 import type { Logger } from '../../logger/index.js'
 import { workdir } from '../../path.js'
+import type { BuilderRuntimePools } from '../../photo/execution-context.js'
 import { StorageManager } from '../../storage/index.js'
 import type { S3CompatibleConfig, StorageConfig } from '../../storage/interfaces.js'
 import type { ThumbnailPluginData } from '../thumbnail-storage/shared.js'
@@ -49,6 +50,7 @@ interface ResolvedPluginConfig {
 
 interface PluginRunState {
   uploaded: Set<string>
+  inflightUploads: Map<string, Promise<boolean>>
   urlCache: Map<string, string>
 }
 
@@ -59,7 +61,9 @@ function normalizeDirectory(directory: string | undefined): string {
 }
 
 function trimSlashes(value: string | undefined | null): string | null {
-  if (!value) { return null }
+  if (!value) {
+    return null
+  }
   const normalized = value.replaceAll('\\', '/').replaceAll(/^\/+|\/+$/g, '')
   return normalized.length > 0 ? normalized : null
 }
@@ -93,6 +97,7 @@ function getOrCreateRunState(container: Map<string, unknown>): PluginRunState {
   if (!state) {
     state = {
       uploaded: new Set<string>(),
+      inflightUploads: new Map<string, Promise<boolean>>(),
       urlCache: new Map<string, string>(),
     }
     container.set(RUN_STATE_KEY, state)
@@ -112,7 +117,9 @@ function createVendor(config: OgVendorConfig): OgVendor {
 }
 
 async function readLocalPublicFile(url: string): Promise<Buffer | null> {
-  if (/^https?:\/\//i.test(url)) { return null }
+  if (/^https?:\/\//i.test(url)) {
+    return null
+  }
 
   const localPath = path.join(workdir, 'public', url.replace(/^\/+/, ''))
   try {
@@ -135,24 +142,43 @@ async function resolvePhotoSource(
   thumbnailData: ThumbnailPluginData | undefined,
   previewData: ThumbnailPluginData | undefined,
   logger: Logger,
+  pools?: BuilderRuntimePools,
 ): Promise<Buffer | null> {
   for (const buffer of [previewData?.buffer, thumbnailData?.buffer]) {
-    if (buffer && buffer.length > 0) { return buffer }
+    if (buffer && buffer.length > 0) {
+      return buffer
+    }
   }
 
   const urls = [previewData?.localUrl, item.previewUrl, thumbnailData?.localUrl, item.thumbnailUrl]
 
   for (const url of urls) {
-    if (!url) { continue }
+    if (!url) {
+      continue
+    }
 
     const local = await readLocalPublicFile(url)
-    if (local) { return local }
+    if (local) {
+      return local
+    }
 
-    if (!/^https?:\/\//i.test(url)) { continue }
+    if (!/^https?:\/\//i.test(url)) {
+      continue
+    }
 
     try {
-      const response = await fetch(url)
-      if (response.ok) { return Buffer.from(await response.arrayBuffer()) }
+      const fetchPhoto = async (): Promise<Buffer | null> => {
+        const response = await fetch(url, { signal: AbortSignal.timeout(15_000) })
+        if (!response.ok) {
+          await response.body?.cancel().catch(() => {})
+          return null
+        }
+        return Buffer.from(await response.arrayBuffer())
+      }
+      const downloaded = await (pools ? pools.network.download(fetchPhoto) : fetchPhoto())
+      if (downloaded) {
+        return downloaded
+      }
     }
     catch (error) {
       logger.main.debug?.(`OG image plugin: could not fetch ${url}`, error)
@@ -239,7 +265,7 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
         }
       },
       afterPhotoProcess: async ({ builder, payload, runShared, logger, pools }) => {
-        if (!resolved || !resolved.enabled) {
+        if (payload.options.dryRun || !resolved || !resolved.enabled) {
           return
         }
 
@@ -255,15 +281,20 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
         }
 
         const state = getOrCreateRunState(runShared)
+        const existingItem = payload.context.existingItem
+        const fileReplaced = Boolean(
+          existingItem && existingItem.lastModified !== payload.context.obj.LastModified?.toISOString(),
+        )
+        const shouldForce = payload.options.isForceMode || payload.options.isForceManifest
 
         // 签名把构图策略版本也带进来：改了裁切逻辑后旧卡片必须重渲染，不能因为键还在就复用
         const ogSignature = `photo-straight-${PHOTO_OG_LAYOUT_VERSION}-webp-q${PHOTO_OG_WEBP_QUALITY}`
         const canReuse
-          = !payload.options.isForceMode
-            && !payload.options.isForceManifest
+          = !shouldForce
+            && !fileReplaced
+            && type !== 'new'
             && (await signatureMatches('og', item.id, ogSignature))
-        const shouldRender
-          = !canReuse && (type !== 'skipped' || payload.options.isForceMode || payload.options.isForceManifest)
+        const shouldRender = !canReuse && (type !== 'skipped' || shouldForce)
 
         const remoteKey = joinSegments(resolved.remotePrefix, `${item.id}.webp`)
 
@@ -282,7 +313,7 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
         const thumbnailData = payload.context.pluginData[THUMBNAIL_PLUGIN_DATA_KEY] as ThumbnailPluginData | undefined
         const previewData = payload.context.pluginData[PREVIEW_PLUGIN_DATA_KEY] as ThumbnailPluginData | undefined
 
-        const source = await resolvePhotoSource(item, thumbnailData, previewData, logger)
+        const source = await resolvePhotoSource(item, thumbnailData, previewData, logger, pools)
         if (!source) {
           logger.main.warn(`OG image plugin: no usable photo source for ${item.id}, skipping.`)
           return
@@ -292,23 +323,34 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
           const webp = pools ? await pools.cpu.runOgRender(source) : await renderPhotoOgImage(source)
 
           const stateForUpload = state
-          if (
-            !stateForUpload.uploaded.has(remoteKey)
-            || payload.options.isForceMode
-            || payload.options.isForceManifest
-          ) {
-            try {
+          if (!stateForUpload.uploaded.has(remoteKey) || shouldForce || fileReplaced) {
+            let uploadPromise = stateForUpload.inflightUploads.get(remoteKey)
+            if (!uploadPromise) {
               const { contentType } = resolved
               const uploadOg = () =>
                 storageManager.uploadFile(remoteKey, webp, {
                   cacheControl: MEDIA_CACHE_CONTROL,
                   contentType,
                 })
-              await (pools ? pools.network.upload(uploadOg) : uploadOg())
-              stateForUpload.uploaded.add(remoteKey)
+              uploadPromise = (async () => {
+                try {
+                  await (pools ? pools.network.upload(uploadOg) : uploadOg())
+                  stateForUpload.uploaded.add(remoteKey)
+                  return true
+                }
+                catch (error) {
+                  logger.main.error(`OG image plugin: failed to upload ${remoteKey}`, error)
+                  return false
+                }
+                finally {
+                  stateForUpload.inflightUploads.delete(remoteKey)
+                }
+              })()
+              stateForUpload.inflightUploads.set(remoteKey, uploadPromise)
             }
-            catch (error) {
-              logger.main.error(`OG image plugin: failed to upload ${remoteKey}`, error)
+
+            const uploadedOk = await uploadPromise
+            if (!uploadedOk) {
               return
             }
           }
@@ -332,8 +374,10 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
           logger.main.error(`OG image plugin: failed to render OG image for ${item.id}`, error)
         }
       },
-      afterBuild: async ({ logger }) => {
-        if (!vendor) { return }
+      afterBuild: async ({ payload, logger }) => {
+        if (payload.options.dryRun || !vendor) {
+          return
+        }
 
         try {
           await vendor.build({ repoRoot, logger })

@@ -20,40 +20,35 @@ import { getGlobalLoggers } from '../photo/logger-adapter.js'
 
 const EXIF_TEMP_DIR = path.join(os.tmpdir(), 'afilmory-exif')
 
-const exiftool = new ExifTool({
-  ...(process.env.EXIFTOOL_PATH ? { exiftoolPath: process.env.EXIFTOOL_PATH } : {}),
-  taskTimeoutMillis: 30000,
-})
+let exiftoolInstance: ExifTool | null = null
+
+function getExiftool(): ExifTool {
+  if (!exiftoolInstance) {
+    exiftoolInstance = new ExifTool({
+      ...(process.env.EXIFTOOL_PATH ? { exiftoolPath: process.env.EXIFTOOL_PATH } : {}),
+      taskTimeoutMillis: 30000,
+    })
+  }
+  return exiftoolInstance
+}
 
 const EMPTY_XMP_METADATA: PhotoXmpMetadata = {
   keywords: [],
   regions: [],
 }
 
-let isExiftoolClosed = false
-const closeExiftool = () => {
-  if (isExiftoolClosed) {
+export async function shutdownExiftool(): Promise<void> {
+  const current = exiftoolInstance
+  if (!current) {
     return
   }
-  isExiftoolClosed = true
-  exiftool.end().catch(noop)
-}
-
-if (process.env.NODE_ENV !== 'development') {
-  process.once('beforeExit', closeExiftool)
-  process.once('SIGINT', closeExiftool)
-  process.once('SIGTERM', closeExiftool)
-}
-
-export async function shutdownExiftool(): Promise<void> {
-  if (isExiftoolClosed) { return }
-  isExiftoolClosed = true
-  await exiftool.end().catch(noop)
+  exiftoolInstance = null
+  await current.end().catch(noop)
 }
 
 // 提取 EXIF 数据；若原图已落盘（如 original-cache），直接读文件省去一次临时写入
 export async function extractExifData(
-  imageBuffer: Buffer,
+  imageBuffer: Buffer | undefined,
   originalBuffer?: Buffer,
   sourcePath?: string,
 ): Promise<PickedExif | null> {
@@ -64,14 +59,19 @@ export async function extractExifData(
 
   try {
     if (!readTarget) {
+      const targetBuffer = originalBuffer || imageBuffer
+      if (!targetBuffer) {
+        log.warn('EXIF 提取缺少输入文件或缓冲区')
+        return null
+      }
       await mkdir(EXIF_TEMP_DIR, { recursive: true })
       tempImagePath = path.join(EXIF_TEMP_DIR, `${crypto.randomUUID()}.jpg`)
-      await writeFile(tempImagePath, originalBuffer || imageBuffer)
+      await writeFile(tempImagePath, targetBuffer)
       readTarget = tempImagePath
     }
 
     log.info(`开始提取 EXIF 数据, 文件路径: ${readTarget}`)
-    const exifData = await exiftool.read(readTarget)
+    const exifData = await getExiftool().read(readTarget)
 
     const result = handleExifData(exifData)
 

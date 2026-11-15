@@ -1,7 +1,11 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import process from 'node:process'
 
 import { workdir } from '@afilmory/builder/path.js'
+
+import { sleep } from '../../../utils/src/backoff.js'
 
 /**
  * 产物参数签名。
@@ -18,18 +22,58 @@ const SIGNATURE_PATH = path.join(workdir, 'src/data/.cache/asset-signatures.json
 
 let table: Record<string, string> | null = null
 let loadPromise: Promise<Record<string, string>> | null = null
-let dirty = false
+let mutationRevision = 0
+let flushedRevision = 0
 let deferFlush = false
 let flushChain: Promise<void> = Promise.resolve()
 
+async function retryOnWindowsLock(op: () => Promise<void>): Promise<void> {
+  const maxAttempts = 5
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await op()
+      return
+    }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if ((code === 'EPERM' || code === 'EBUSY') && attempt < maxAttempts) {
+        await sleep(30 * attempt)
+        continue
+      }
+      throw error
+    }
+  }
+}
+
+export async function renameWithWindowsRetry(srcPath: string, dstPath: string): Promise<void> {
+  await retryOnWindowsLock(() => fs.rename(srcPath, dstPath))
+}
+
+export async function removeWithWindowsRetry(targetPath: string): Promise<void> {
+  await retryOnWindowsLock(() => fs.rm(targetPath, { force: true }))
+}
+
 async function load(): Promise<Record<string, string>> {
-  if (table) { return table }
+  if (table) {
+    return table
+  }
   if (!loadPromise) {
     loadPromise = (async () => {
       try {
-        table = JSON.parse(await fs.readFile(SIGNATURE_PATH, 'utf8')) as Record<string, string>
+        const raw = await fs.readFile(SIGNATURE_PATH, 'utf8')
+        const parsed: unknown = JSON.parse(raw)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          table = parsed as Record<string, string>
+        }
+        else {
+          table = {}
+        }
       }
-      catch {
+      catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code !== 'ENOENT') {
+          console.warn(`[asset-signature] Failed to load ${SIGNATURE_PATH}, starting fresh:`, error)
+        }
         table = {}
       }
       return table
@@ -51,31 +95,46 @@ export function setSignatureBatchMode(enabled: boolean): void {
 }
 
 export async function signatureMatches(kind: AssetKind, photoId: string, signature: string): Promise<boolean> {
-  if (hardForceEncode()) { return false }
+  if (hardForceEncode()) {
+    return false
+  }
   const all = await load()
   return all[keyOf(kind, photoId)] === signature
 }
 
 export async function flushSignatures(): Promise<void> {
-  flushChain = flushChain.then(async () => {
-    if (!dirty || !table) { return }
+  const nextFlush = flushChain.then(async () => {
+    if (flushedRevision >= mutationRevision || !table) {
+      return
+    }
+    const targetRevision = mutationRevision
     const snapshot = JSON.stringify(table, null, 2)
-    dirty = false
     const dir = path.dirname(SIGNATURE_PATH)
     await fs.mkdir(dir, { recursive: true })
-    const tmpPath = `${SIGNATURE_PATH}.tmp-${process.pid}`
-    await fs.writeFile(tmpPath, snapshot)
-    await fs.rename(tmpPath, SIGNATURE_PATH)
+    const tmpPath = `${SIGNATURE_PATH}.tmp-${process.pid}-${crypto.randomUUID()}`
+    try {
+      await fs.writeFile(tmpPath, snapshot)
+      await renameWithWindowsRetry(tmpPath, SIGNATURE_PATH)
+      flushedRevision = targetRevision
+    }
+    finally {
+      await fs.rm(tmpPath, { force: true }).catch(() => {})
+    }
   })
-  await flushChain
+
+  // 防止单次落盘失败永久污染 flushChain 链，同时保留本次调用的异常抛出
+  flushChain = nextFlush.catch(() => {})
+  await nextFlush
 }
 
 export async function writeSignature(kind: AssetKind, photoId: string, signature: string): Promise<void> {
   const all = await load()
   const key = keyOf(kind, photoId)
-  if (all[key] === signature) { return }
+  if (all[key] === signature) {
+    return
+  }
   all[key] = signature
-  dirty = true
+  mutationRevision++
   if (!deferFlush) {
     await flushSignatures()
   }

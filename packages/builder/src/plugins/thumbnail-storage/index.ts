@@ -38,6 +38,7 @@ interface ResolvedPluginConfig {
 
 interface PluginRunState {
   uploaded: Set<string>
+  inflightUploads: Map<string, Promise<boolean>>
   urlCache: Map<string, string>
 }
 
@@ -48,7 +49,9 @@ function normalizeDirectory(directory: string | undefined): string {
 }
 
 function trimSlashes(value: string | undefined | null): string | null {
-  if (!value) { return null }
+  if (!value) {
+    return null
+  }
   const normalized = value.replaceAll('\\', '/').replaceAll(/^\/+|\/+$/g, '')
   return normalized.length > 0 ? normalized : null
 }
@@ -85,6 +88,7 @@ function getOrCreateRunState(container: Map<string, unknown>): PluginRunState {
   if (!state) {
     state = {
       uploaded: new Set<string>(),
+      inflightUploads: new Map<string, Promise<boolean>>(),
       urlCache: new Map<string, string>(),
     }
     container.set(RUN_STATE_KEY, state)
@@ -104,20 +108,37 @@ async function uploadMediaAsset(params: {
 }): Promise<string | null> {
   const { storageManager, state, remoteKey, data, configuredContentType, pools, logger, assetLabel } = params
   const buffer = data.buffer
-  if (!buffer) { return null }
+  if (!buffer) {
+    return null
+  }
 
   if (!state.uploaded.has(remoteKey)) {
-    try {
+    let uploadPromise = state.inflightUploads.get(remoteKey)
+    if (!uploadPromise) {
       const doUpload = () =>
         storageManager.uploadFile(remoteKey, buffer, {
           cacheControl: MEDIA_CACHE_CONTROL,
           contentType: configuredContentType || contentTypeFromFilename(data.fileName),
         })
-      await (pools ? pools.network.upload(doUpload) : doUpload())
-      state.uploaded.add(remoteKey)
+      uploadPromise = (async () => {
+        try {
+          await (pools ? pools.network.upload(doUpload) : doUpload())
+          state.uploaded.add(remoteKey)
+          return true
+        }
+        catch (error) {
+          logger.thumbnail.error(`上传${assetLabel}失败：${remoteKey}`, error)
+          return false
+        }
+        finally {
+          state.inflightUploads.delete(remoteKey)
+        }
+      })()
+      state.inflightUploads.set(remoteKey, uploadPromise)
     }
-    catch (error) {
-      logger.thumbnail.error(`上传${assetLabel}失败：${remoteKey}`, error)
+
+    const uploadedOk = await uploadPromise
+    if (!uploadedOk) {
       return null
     }
   }
@@ -193,6 +214,9 @@ export default function thumbnailStoragePlugin(options: ThumbnailStoragePluginOp
         }
       },
       afterPhotoProcess: async ({ builder, payload, runShared, logger, pools }) => {
+        if (payload.options.dryRun) {
+          return
+        }
         if (!resolved) {
           logger.main.warn('Thumbnail storage plugin is not initialized correctly. Skipping upload.')
           return

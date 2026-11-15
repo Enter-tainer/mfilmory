@@ -32,14 +32,36 @@ function toUint8ArrayOrBuffer(data: unknown): Buffer {
   throw new Error('Expected Buffer/Uint8Array payload in CPU worker')
 }
 
-function safeSend(message: CpuWorkerResponse): void {
-  try {
-    if (process.send && process.connected) {
-      process.send(message)
-    }
+function sendIpcMessage(message: CpuWorkerResponse, onFailure?: (err: Error) => void): boolean {
+  if (!process.send || !process.connected) {
+    onFailure?.(new Error('IPC channel disconnected'))
+    return false
   }
-  catch {
-    // 主进程已关闭 IPC 通道
+  try {
+    const accepted = process.send(message, undefined, undefined, (err) => {
+      if (err) {
+        onFailure?.(err)
+      }
+    })
+    if (!accepted && !process.connected) {
+      onFailure?.(new Error('IPC channel closed during send'))
+      return false
+    }
+    return true
+  }
+  catch (err) {
+    onFailure?.(err instanceof Error ? err : new Error(String(err)))
+    return false
+  }
+}
+
+function sendTaskErrorOrExit(id: number, error: unknown): void {
+  const message = error instanceof Error ? (error.stack ?? error.message) : String(error)
+  const sent = sendIpcMessage({ type: 'error', id, message }, () => {
+    process.exit(1)
+  })
+  if (!sent) {
+    process.exit(1)
   }
 }
 
@@ -54,7 +76,7 @@ function startCpuWorker(): void {
 
   setLogListener(
     (msg) => {
-      safeSend({
+      sendIpcMessage({
         type: 'log',
         tag: msg.tag,
         level: String(msg.level),
@@ -73,6 +95,12 @@ function startCpuWorker(): void {
     loggers: workerLoggers,
   }
 
+  // 由父进程通过 IPC shutdown 统一协调退出，避免首次 Ctrl+C 时子进程提前死亡触发误重启
+  process.on('SIGINT', () => {})
+  process.on('disconnect', () => {
+    process.exit(1)
+  })
+
   process.on('message', async (message: CpuWorkerRequest) => {
     if (message.type === 'shutdown') {
       process.removeAllListeners('message')
@@ -86,14 +114,12 @@ function startCpuWorker(): void {
           : message.input
 
         const output = await runWithPhotoExecutionContext(workerContext, () => runPhotoCpuTask(input))
-        safeSend({ type: 'photo-result', id: message.id, output })
+        sendIpcMessage({ type: 'photo-result', id: message.id, output }, (err) => {
+          sendTaskErrorOrExit(message.id, err)
+        })
       }
       catch (error) {
-        safeSend({
-          type: 'error',
-          id: message.id,
-          message: error instanceof Error ? (error.stack ?? error.message) : String(error),
-        })
+        sendTaskErrorOrExit(message.id, error)
       }
       return
     }
@@ -105,19 +131,17 @@ function startCpuWorker(): void {
           buffer: toUint8ArrayOrBuffer(message.input.buffer),
         }
         const buffer = await runWithPhotoExecutionContext(workerContext, () => runOgRenderTask(input))
-        safeSend({ type: 'og-result', id: message.id, buffer })
+        sendIpcMessage({ type: 'og-result', id: message.id, buffer }, (err) => {
+          sendTaskErrorOrExit(message.id, err)
+        })
       }
       catch (error) {
-        safeSend({
-          type: 'error',
-          id: message.id,
-          message: error instanceof Error ? (error.stack ?? error.message) : String(error),
-        })
+        sendTaskErrorOrExit(message.id, error)
       }
     }
   })
 
-  safeSend({ type: 'ready', workerId })
+  sendIpcMessage({ type: 'ready', workerId })
 }
 
 startCpuWorker()
