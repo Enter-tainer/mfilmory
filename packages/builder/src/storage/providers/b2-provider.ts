@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import path from 'node:path'
 
 import { SUPPORTED_FORMATS } from '../../constants/index.js'
+import { isDerivedAssetKey } from '../derived-assets.js'
 import { logger } from '../../logger/index.js'
 import type { B2Config, ProgressCallback, StorageObject, StorageProvider, StorageUploadOptions } from '../interfaces.js'
 
@@ -493,6 +494,10 @@ export class B2StorageProvider implements StorageProvider {
   async listImages(): Promise<StorageObject[]> {
     const allFiles = await this.fetchAllFiles()
     return allFiles.filter((file) => {
+      // builder 自己的产物（.afilmory/）也是 .avif/.webp 等合法格式，不能当输入照片
+      if (isDerivedAssetKey(file.key)) {
+        return false
+      }
       const ext = path.extname(file.key).toLowerCase()
       return SUPPORTED_FORMATS.has(ext)
     })
@@ -627,3 +632,5 @@ export class B2StorageProvider implements StorageProvider {
     return storageObject
   }
 }
+
+
