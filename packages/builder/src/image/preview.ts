@@ -26,6 +26,11 @@ export const PREVIEW_MIME_TYPE = 'image/avif'
  */
 export const PREVIEW_SIZE = 2560
 export const PREVIEW_QUALITY = 45
+/**
+ * 位深，理由同缩略图：8-bit 源图让 libaom 在 10-bit 内部编码，量化误差更细。
+ * 同 SSIMULACRA2 下 8 张样图全部变小，几何平均 −2.9%（2560 档），编码慢 ~15%。
+ */
+export const PREVIEW_BITDEPTH = 10
 
 export function getPreviewFilename(photoId: string): string {
   return `${photoId}.${PREVIEW_EXTENSION}`
@@ -66,7 +71,7 @@ export async function generatePreview(
   const log = getGlobalLoggers().thumbnail
 
   // 参数签名没变且文件存在 → 直接复用；--force-thumbnails 也不会重复编码
-  const signature = `inside-${PREVIEW_SIZE}q${PREVIEW_QUALITY}e6.${PREVIEW_EXTENSION}`
+  const signature = `inside-${PREVIEW_SIZE}q${PREVIEW_QUALITY}e6b${PREVIEW_BITDEPTH}.${PREVIEW_EXTENSION}`
   const forceHard = forceRegenerate && hardForceEncode()
   if (!forceHard && (await previewExists(photoId)) && (await signatureMatches('preview', photoId, signature))) {
     try {
@@ -82,7 +87,7 @@ export async function generatePreview(
     const previewBuffer = await sharp(imageBuffer, { limitInputPixels })
       .rotate()
       .resize({ width: PREVIEW_SIZE, height: PREVIEW_SIZE, fit: 'inside', withoutEnlargement: true })
-      .avif({ quality: PREVIEW_QUALITY, effort: 6 })
+      .avif({ quality: PREVIEW_QUALITY, effort: 6, bitdepth: PREVIEW_BITDEPTH })
       .toBuffer()
 
     if (persistToDisk) {

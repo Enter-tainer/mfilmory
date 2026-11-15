@@ -23,6 +23,12 @@ export const THUMBNAIL_EXTENSION = 'avif'
 export const THUMBNAIL_MIME_TYPE = 'image/avif'
 export const THUMBNAIL_QUALITY = 70
 /**
+ * 位深。源图是 8-bit，但让 libaom 在 10-bit 内部编码能把量化误差做得更细：
+ * 同 SSIMULACRA2 下 8 张样图**全部变小**，几何平均 −4.1%（500px 档），代价是编码慢 ~15%。
+ * 浏览器要求 AVIF Main10：Chrome 85+ / Firefox 93+ / Safari 16.4+。
+ */
+export const THUMBNAIL_BITDEPTH = 10
+/**
  * 网格一格的实际物理像素（按 MasonryView 的列宽算法 + 常见 DPR 推算）：
  * 手机 2 列 150 CSS @3x ≈ 450px；iPad/Mac 250 CSS @2x = 500px；4K@150% 约 469px。
  * 常见设备最大约 500 物理像素，所以 512 足够（再小会在 MacBook/iPad @2x 上露馅）。
@@ -122,7 +128,7 @@ async function generateNewThumbnail(
       .resize(THUMBNAIL_WIDTH, null, {
         withoutEnlargement: true,
       })
-      .avif({ quality: THUMBNAIL_QUALITY, effort: 6 })
+      .avif({ quality: THUMBNAIL_QUALITY, effort: 6, bitdepth: THUMBNAIL_BITDEPTH })
       .toBuffer()
 
     // 保存到文件
@@ -161,7 +167,7 @@ export async function generateThumbnailAndBlurhash(
     }
 
     // 参数签名没变且文件存在 → 直接复用；--force-thumbnails 也不会重复编码
-    const signature = `${THUMBNAIL_WIDTH}q${THUMBNAIL_QUALITY}e6.${THUMBNAIL_EXTENSION}`
+    const signature = `${THUMBNAIL_WIDTH}q${THUMBNAIL_QUALITY}e6b${THUMBNAIL_BITDEPTH}.${THUMBNAIL_EXTENSION}`
     const forceHard = forceRegenerate && hardForceEncode()
     if (!forceHard && (await thumbnailExists(photoId)) && (await signatureMatches('thumbnail', photoId, signature))) {
       const existingResult = await processExistingThumbnail(photoId)

@@ -116,12 +116,15 @@ pnpm build            # 把 manifest 外置成 photos-manifest.<hash>.json，产
 
 | 产物 | 格式 | 参数 | 说明 |
 | --- | --- | --- | --- |
-| 缩略图（网格，`500px` 宽） | **AVIF** | `quality: 70`, `effort: 6` | 网格一格最多显示 500 物理像素（手机 150 CSS@3x、iPad/Mac 250 CSS@2x、4K@100% 472px），所以 500 正好。实测 SSIMULACRA2 83.5 vs 旧 600px JPEG q100 的 85.6（98% 观感），体积 32KB vs 248KB |
-| 占位图（阅览器，长边 `2560`） | **AVIF** | `quality: 45`, `effort: 6` | 点开大图时先显示它，原图下完无缝替换。4K 全屏实测 S2 27.3 / XPSNR 37.8 / SSIM 0.80，旧 600px JPEG q100 占位只有 −16.1 / 33.9 / 0.70，而体积还小 17%。按**长边**而非宽度缩放，竖图不会白付 1.5 倍像素 |
+| 缩略图（网格，`500px` 宽） | **AVIF 10-bit** | `quality: 70`, `effort: 6`, `bitdepth: 10` | 网格一格最多显示 500 物理像素（手机 150 CSS@3x、iPad/Mac 250 CSS@2x、4K@100% 472px），所以 500 正好。实测 SSIMULACRA2 83.5 vs 旧 600px JPEG q100 的 85.6（98% 观感），体积 32KB vs 248KB |
+| 占位图（阅览器，长边 `2560`） | **AVIF 10-bit** | `quality: 45`, `effort: 6`, `bitdepth: 10` | 点开大图时先显示它，原图下完无缝替换。4K 全屏实测 S2 27.3 / XPSNR 37.8 / SSIM 0.80，旧 600px JPEG q100 占位只有 −16.1 / 33.9 / 0.70，而体积还小 17%。按**长边**而非宽度缩放，竖图不会白付 1.5 倍像素 |
 | OG 卡（分享图） | **WebP** | `quality: 88` | 1200×630，**照片满幅、无底色无文字**（站点级从近期横向照片里挑一张）。PNG 时代 421KB → WebP ~30–180KB。**OG 永远不要用 AVIF**：跨平台实测只有 Facebook 支持 |
 
 编码器是 sharp（libvips 8.18.7 → libheif 1.23.5 → libaom 3.15.1）。`effort` 是 libaom 速度档（0–9），6 比默认 4 慢但同质量更小；改它会让所有产物重新编码。参数曲线和目视对比在 `docs/image-quality/`。
 
+- **10-bit（Main10）而不是 8-bit**：源图本身是 8-bit，10-bit 不会凭空多出信息，但 libaom 的高位深量化步进更细。8 张样图按**各自今天的 SSIMULACRA2** 对齐后，**8 张全部变小**：占位图几何平均 −2.9%（单张 −0.6% ~ −7.1%，大面积渐变获益最多）、缩略图 −4.1%（−1.5% ~ −7.7%），代价是编码慢约 15%。`bitdepth` 已并入缓存签名（`...e6b10.avif`），所以换过去必然触发一次全量重编码。
+- 同一轮对照扫掉的替代方案：SVT-AV1（最好的 preset 10 也要 +13% 体积）、rav1e（+23~46%）、WebP（+27%）、libaom `tune=ssim`（+4.3%），都不如现在的 libaom。`effort` 是可以继续加的旋钮，但收益很小：6→8 在同画质下只再省 1~1.5%，编码时间却翻倍（占位图 2.0s → 4.0s/张）。数据和二维 RD 图在 `docs/image-quality/svt/`。
+- 兼容性：AVIF 目录入口本身要求 Chrome 85+ / Firefox 93+ / Safari 16.4+；10-bit 输出没有额外的版本门槛，但 **Safari 侧只做了文档核对、没有真机验证**（Chromium 已实测可解码渲染，WebKit 已知缺陷只影响「10-bit + alpha」的图，本站产物无 alpha）。
 - 缩略图文件名/扩展名统一由 `packages/builder/src/image/thumbnail.ts` 的 `getThumbnailFilename()` 提供，不要再硬编码 `.jpg`（上游 #259 就是这么坏的）。
 - 换格式要全量重生成：`pnpm build:manifest -- --force-thumbnails`。残留的旧格式文件由 `handleDeletedPhotos` 清理——只在新格式文件已存在时才删，避免 `--force-manifest`（不重生成缩略图）把唯一副本删掉。
 - 远端存储里的旧格式对象**不会**自动删（`thumbnail-storage` 把自己的前缀排除在扫描外）：用 `pnpm cleanup:assets` 统计，`-- --delete` 清缩略图，其他目录加 `--directory=.afilmory/og-images --keep=webp`。**先确认线上 manifest 已经不引用旧格式再删**。
