@@ -6,6 +6,7 @@ import sharp from 'sharp'
 
 import { getGlobalLoggers } from '../photo/logger-adapter.js'
 import { hardForceEncode, signatureMatches, writeSignature } from './asset-signature.js'
+import { resolveAvifBitdepth } from './avif-bitdepth.js'
 
 /**
  * 阅览器占位图（preview）。
@@ -29,8 +30,11 @@ export const PREVIEW_QUALITY = 45
 /**
  * 位深，理由同缩略图：8-bit 源图让 libaom 在 10-bit 内部编码，量化误差更细。
  * 同 SSIMULACRA2 下 8 张样图全部变小，几何平均 −2.9%（2560 档），编码慢 ~15%。
+ * 带 alpha 的源图回退 8-bit（见 `resolveAvifBitdepth`）。
  */
 export const PREVIEW_BITDEPTH = 10
+/** 参数签名；入口门禁也用它判断「参数变没变」（文件名不随参数变化）。 */
+export const PREVIEW_SIGNATURE = `inside-${PREVIEW_SIZE}q${PREVIEW_QUALITY}e6b${PREVIEW_BITDEPTH}.${PREVIEW_EXTENSION}`
 
 export function getPreviewFilename(photoId: string): string {
   return `${photoId}.${PREVIEW_EXTENSION}`
@@ -71,7 +75,7 @@ export async function generatePreview(
   const log = getGlobalLoggers().thumbnail
 
   // 参数签名没变且文件存在 → 直接复用；--force-thumbnails 也不会重复编码
-  const signature = `inside-${PREVIEW_SIZE}q${PREVIEW_QUALITY}e6b${PREVIEW_BITDEPTH}.${PREVIEW_EXTENSION}`
+  const signature = PREVIEW_SIGNATURE
   const forceHard = forceRegenerate && hardForceEncode()
   if (!forceHard && (await previewExists(photoId)) && (await signatureMatches('preview', photoId, signature))) {
     try {
@@ -84,10 +88,11 @@ export async function generatePreview(
 
   const startTime = Date.now()
   try {
+    const bitdepth = await resolveAvifBitdepth(PREVIEW_BITDEPTH, imageBuffer, limitInputPixels)
     const previewBuffer = await sharp(imageBuffer, { limitInputPixels })
       .rotate()
       .resize({ width: PREVIEW_SIZE, height: PREVIEW_SIZE, fit: 'inside', withoutEnlargement: true })
-      .avif({ quality: PREVIEW_QUALITY, effort: 6, bitdepth: PREVIEW_BITDEPTH })
+      .avif({ quality: PREVIEW_QUALITY, effort: 6, bitdepth })
       .toBuffer()
 
     if (persistToDisk) {
@@ -96,7 +101,10 @@ export async function generatePreview(
     }
 
     log?.info(`生成占位图：${photoId} (${Math.round(previewBuffer.length / 1024)}KB, ${Date.now() - startTime}ms)`)
-    await writeSignature('preview', photoId, signature)
+    // --dry-run 不落盘时不记签名，否则下次构建会以为已是新参数产物而永久跳过
+    if (persistToDisk) {
+      await writeSignature('preview', photoId, signature)
+    }
     return { previewUrl, previewBuffer }
   }
   catch (error) {

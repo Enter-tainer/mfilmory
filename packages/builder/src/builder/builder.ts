@@ -3,6 +3,8 @@ import process from 'node:process'
 
 import type { AfilmoryManifest, CameraInfo, LensInfo, PhotoManifestItem, ProcessPhotoResult } from '@afilmory/typing'
 
+import { isMediaFormatCurrent, markMediaFormatCurrent } from '../image/media-format.js'
+import { previewExists } from '../image/preview.js'
 import { thumbnailExists } from '../image/thumbnail.js'
 import { logger } from '../logger/index.js'
 import { handleDeletedPhotos, loadExistingManifest, needsUpdate, saveManifest } from '../manifest/manager.js'
@@ -420,6 +422,12 @@ export class AfilmoryBuilder {
           failedCount,
         })
 
+        // 全部照片都处理成功才把「格式版本」落盘：中途失败或 --dry-run 时不写，
+        // 下次构建会继续按「版本不符」重新排队（幂等，最多多编一次）。
+        if (!options.dryRun && failedCount === 0) {
+          await markMediaFormatCurrent()
+        }
+
         for (const [key, item] of existingManifestMap) {
           if (s3ImageKeys.has(key) && !manifest.some(m => m.s3Key === key)) {
             const normalizedItem = this.normalizeManifestItem(item, xmpSettings)
@@ -763,6 +771,14 @@ export class AfilmoryBuilder {
       return imageObjects
     }
 
+    // 编码参数（宽度 / 质量 / 位深）变了就必须整体重来：产物文件名不含参数，
+    // 只看「文件在不在」会静默复用旧产物——历史上以为签名会触发重编码，
+    // 实际这一层先 stat 了文件就跳过了，日志还一切正常。
+    if (!(await isMediaFormatCurrent())) {
+      logger.main.info('媒体格式版本已变化，本次构建会重新生成全部缩略图 / 占位图')
+      return imageObjects
+    }
+
     const tasksToProcess: Awaited<ReturnType<StorageManager['listImages']>> = []
 
     for (const obj of imageObjects) {
@@ -801,6 +817,12 @@ export class AfilmoryBuilder {
       // 检查缩略图是否存在，如果不存在或强制刷新缩略图则需要处理
       const hasThumbnail = await thumbnailExists(photoId)
       if (!hasThumbnail || options.isForceThumbnails) {
+        tasksToProcess.push(obj)
+        continue
+      }
+
+      // 占位图比缩略图晚引入，历史产物可能只有缩略图
+      if (!(await previewExists(photoId))) {
         tasksToProcess.push(obj)
         continue
       }

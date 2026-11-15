@@ -7,6 +7,7 @@ import sharp from 'sharp'
 
 import { getGlobalLoggers } from '../photo/logger-adapter.js'
 import { hardForceEncode, signatureMatches, writeSignature } from './asset-signature.js'
+import { resolveAvifBitdepth } from './avif-bitdepth.js'
 import { generateBlurhash } from './blurhash.js'
 
 // 常量定义
@@ -24,8 +25,9 @@ export const THUMBNAIL_MIME_TYPE = 'image/avif'
 export const THUMBNAIL_QUALITY = 70
 /**
  * 位深。源图是 8-bit，但让 libaom 在 10-bit 内部编码能把量化误差做得更细：
- * 同 SSIMULACRA2 下 8 张样图**全部变小**，几何平均 −4.1%（500px 档），代价是编码慢 ~15%。
- * 浏览器要求 AVIF Main10：Chrome 85+ / Firefox 93+ / Safari 16.4+。
+ * 同 SSIMULACRA2 下 8 张样图**全部变小**，几何平均 −4.4%（500px 档），代价是编码慢 ~10%。
+ * 带 alpha 的源图（PNG/WebP 等）回退到 8-bit：Safari 对「10-bit + alpha」的 AVIF 有过
+ * 不渲染的报告（WebKit #245669），但它对不透明图没有这个问题。
  */
 export const THUMBNAIL_BITDEPTH = 10
 /**
@@ -34,6 +36,12 @@ export const THUMBNAIL_BITDEPTH = 10
  * 常见设备最大约 500 物理像素，所以 512 足够（再小会在 MacBook/iPad @2x 上露馅）。
  */
 export const THUMBNAIL_WIDTH = 500
+/**
+ * 参数签名：编码参数一变就会失配，从而触发重编码。
+ * 入口门禁（`filterTaskImages`）也拿它当权威判据——只看「文件在不在」是不够的，
+ * 换位深这类改动文件名不变，会静默复用旧产物。
+ */
+export const THUMBNAIL_SIGNATURE = `${THUMBNAIL_WIDTH}q${THUMBNAIL_QUALITY}e6b${THUMBNAIL_BITDEPTH}.${THUMBNAIL_EXTENSION}`
 
 /** 缩略图文件名。所有调用方都应走这里，不要再硬编码扩展名（上游 #259）。 */
 export function getThumbnailFilename(photoId: string): string {
@@ -121,6 +129,7 @@ async function generateNewThumbnail(
   try {
     // 创建 Sharp 实例，复用于缩略图和 blurhash 生成
     const sharpInstance = sharp(imageBuffer, { limitInputPixels }).rotate() // 自动根据 EXIF 旋转
+    const bitdepth = await resolveAvifBitdepth(THUMBNAIL_BITDEPTH, imageBuffer, limitInputPixels)
 
     // 生成缩略图
     const thumbnailBuffer = await sharpInstance
@@ -128,7 +137,7 @@ async function generateNewThumbnail(
       .resize(THUMBNAIL_WIDTH, null, {
         withoutEnlargement: true,
       })
-      .avif({ quality: THUMBNAIL_QUALITY, effort: 6, bitdepth: THUMBNAIL_BITDEPTH })
+      .avif({ quality: THUMBNAIL_QUALITY, effort: 6, bitdepth })
       .toBuffer()
 
     // 保存到文件
@@ -167,7 +176,7 @@ export async function generateThumbnailAndBlurhash(
     }
 
     // 参数签名没变且文件存在 → 直接复用；--force-thumbnails 也不会重复编码
-    const signature = `${THUMBNAIL_WIDTH}q${THUMBNAIL_QUALITY}e6b${THUMBNAIL_BITDEPTH}.${THUMBNAIL_EXTENSION}`
+    const signature = THUMBNAIL_SIGNATURE
     const forceHard = forceRegenerate && hardForceEncode()
     if (!forceHard && (await thumbnailExists(photoId)) && (await signatureMatches('thumbnail', photoId, signature))) {
       const existingResult = await processExistingThumbnail(photoId)
@@ -180,7 +189,9 @@ export async function generateThumbnailAndBlurhash(
 
     // 生成新的缩略图
     const result = await generateNewThumbnail(imageBuffer, photoId, persistToDisk, limitInputPixels)
-    if (result.thumbnailBuffer) {
+    // 只在真的写了文件之后记签名：--dry-run 下 persistToDisk=false，
+    // 若此时也记签名，下次构建会以为磁盘上已经是新参数产物而永久跳过（回不去）。
+    if (result.thumbnailBuffer && persistToDisk) {
       await writeSignature('thumbnail', photoId, signature)
     }
     return result
