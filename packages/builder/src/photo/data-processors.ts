@@ -7,9 +7,10 @@ import { decompressUint8Array } from '@afilmory/utils'
 import type { Sharp } from 'sharp'
 
 import { HEIC_FORMATS } from '../constants/index.js'
+import { signatureMatches } from '../image/asset-signature.js'
 import { extractExifData } from '../image/exif.js'
 import { calculateHistogramAndAnalyzeTone } from '../image/histogram.js'
-import { generateThumbnailAndBlurhash, getThumbnailPaths, thumbnailExists } from '../image/thumbnail.js'
+import { generateThumbnailAndBlurhash, getThumbnailPaths, THUMBNAIL_SIGNATURE, thumbnailExists } from '../image/thumbnail.js'
 import { getPhotoExecutionContext } from './execution-context.js'
 import { getGlobalLoggers } from './logger-adapter.js'
 import type { PhotoProcessorOptions } from './processor.js'
@@ -40,6 +41,8 @@ export async function processThumbnailAndBlurhash(
     && !options.isForceThumbnails
     && existingItem?.thumbHash
     && (await thumbnailExists(photoId))
+    // 文件名不随参数变化，必须确认这份文件确实是用当前参数编的，否则换位深会静默复用旧图
+    && (await signatureMatches('thumbnail', photoId, THUMBNAIL_SIGNATURE))
   ) {
     try {
       const { thumbnailPath, thumbnailUrl } = getThumbnailPaths(photoId)

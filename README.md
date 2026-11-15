@@ -116,14 +116,22 @@ pnpm build            # 把 manifest 外置成 photos-manifest.<hash>.json，产
 
 | 产物 | 格式 | 参数 | 说明 |
 | --- | --- | --- | --- |
-| 缩略图（网格，`500px` 宽） | **AVIF** | `quality: 70`, `effort: 6` | 网格一格最多显示 500 物理像素（手机 150 CSS@3x、iPad/Mac 250 CSS@2x、4K@100% 472px），所以 500 正好。实测 SSIMULACRA2 83.5 vs 旧 600px JPEG q100 的 85.6（98% 观感），体积 32KB vs 248KB |
-| 占位图（阅览器，长边 `2560`） | **AVIF** | `quality: 45`, `effort: 6` | 点开大图时先显示它，原图下完无缝替换。4K 全屏实测 S2 27.3 / XPSNR 37.8 / SSIM 0.80，旧 600px JPEG q100 占位只有 −16.1 / 33.9 / 0.70，而体积还小 17%。按**长边**而非宽度缩放，竖图不会白付 1.5 倍像素 |
+| 缩略图（网格，`500px` 宽） | **AVIF 10-bit** | `quality: 70`, `effort: 6`, `bitdepth: 10` | 网格一格最多显示 500 物理像素（手机 150 CSS@3x、iPad/Mac 250 CSS@2x、4K@100% 472px），所以 500 正好。实测 SSIMULACRA2 83.5 vs 旧 600px JPEG q100 的 85.6（98% 观感），体积 32KB vs 248KB |
+| 占位图（阅览器，长边 `2560`） | **AVIF 10-bit** | `quality: 45`, `effort: 6`, `bitdepth: 10` | 点开大图时先显示它，原图下完无缝替换。4K 全屏实测 S2 27.3 / XPSNR 37.8 / SSIM 0.80，旧 600px JPEG q100 占位只有 −16.1 / 33.9 / 0.70，而体积还小 17%。按**长边**而非宽度缩放，竖图不会白付 1.5 倍像素 |
 | OG 卡（分享图） | **WebP** | `quality: 88` | 1200×630，**照片满幅、无底色无文字**（站点级从近期横向照片里挑一张）。PNG 时代 421KB → WebP ~30–180KB。**OG 永远不要用 AVIF**：跨平台实测只有 Facebook 支持 |
 
-编码器是 sharp（libvips 8.18.7 → libheif 1.23.5 → libaom 3.15.1）。`effort` 是 libaom 速度档（0–9），6 比默认 4 慢但同质量更小；改它会让所有产物重新编码。参数曲线和目视对比在 `docs/image-quality/`。
+编码器是 sharp（libvips 8.18.7 → libheif 1.23.5 → libaom 3.15.1）。`effort` 是 libaom 速度档（0–9），6 比默认 4 慢但同质量更小。**产物文件名不含编码参数**（`<photoId>.avif`），所以「参数变了要不要重编」完全靠 `apps/web/src/data/.cache/asset-signatures.json` 里的签名：入口门禁（`filterTaskImages`）和编码函数都以它为准，只看「文件在不在」是不够的。
 
+- **10-bit（Main10）而不是 8-bit**：源图本身是 8-bit，10-bit 不会凭空多出信息，但 libaom 的高位深量化步进更细。8 张样图按**各自当前的 SSIMULACRA2** 逐图对齐后，**8 张全部变小**：占位图几何平均 −2.9%（单张 −0.6% ~ −7.1%）、缩略图 −4.4%（−1.5% ~ −9.4%）；换成**等字节**看，同一批图 10-bit 平均高 +0.64 / +0.70 分 SSIMULACRA2（两个尺寸档 `8/8` 全为正），说明不是「q 映射变宽了」而是真的 RD 改善。代价是编码慢约 10–15%（占位图 1.77s → 2.04s/张）。
+- **带 alpha 的源图回退 8-bit**（`image/avif-bitdepth.ts`）。Safari 对「10-bit + alpha」的 AVIF 有过不渲染的报告（WebKit #245669，转 Apple radar 后无公开结论）；本站现有 369 张都是 JPEG，不受影响，但 builder 也收 PNG/WebP/TIFF/BMP，所以按 `hasAlpha` 回落，签名仍只记录策略（`...b10.avif`）。
+- 同一轮对照扫掉的替代方案（口径：逐图对齐到当前 SSIMULACRA2 后比字节，n 为能匹配上的张数）：SVT-AV1 最好的 preset 10 也要 **+46.5%**（n=6）、rav1e speed 8/10 **+30.5% / +46.3%**（n=8）、WebP effort 6 **+63.7%**（n=6）、ffmpeg libaom `tune=ssim` **+34.9%**（n=6）。`effort` 继续加到 7/8 只再省 1.4%，时间却 +50~67%，不值。
+- **色度子采样不要动**：sharp 的 AVIF 默认是 **4:4:4**（不是 4:2:0）。显式设 `4:2:0` 在同 q 下确实少 4~6%，但按同画质对齐后反而**更费**（占位图 +1.9%），所以维持默认。
+- 兼容性：AVIF 本身要求 Chrome 85+ / Firefox 93+ / Safari 16.4+（caniuse；Safari 16.1–16.3 只是 partial）。**10-bit（Main10）没有逐版本的门槛数据**，本次只在 Chromium 实测可解码渲染，Safari/iOS **没有真机验证**——上线前应该拿一台 iPhone 看一眼。
 - 缩略图文件名/扩展名统一由 `packages/builder/src/image/thumbnail.ts` 的 `getThumbnailFilename()` 提供，不要再硬编码 `.jpg`（上游 #259 就是这么坏的）。
-- 换格式要全量重生成：`pnpm build:manifest -- --force-thumbnails`。残留的旧格式文件由 `handleDeletedPhotos` 清理——只在新格式文件已存在时才删，避免 `--force-manifest`（不重生成缩略图）把唯一副本删掉。
+- **换参数（含位深/质量/尺寸）**：`image/media-format.ts` 的 `MEDIA_FORMAT_VERSION` 由 `THUMBNAIL_*` / `PREVIEW_*` 拼成，构建成功后会写到 `apps/web/src/data/.cache/media-format-version`。标记失配时入口门禁会把全部照片重新排队，所以改参数不需要再额外加 `--force-*`（这是 10-bit 这次补上的漏洞：在此之前只看「文件在不在」，换参数会静默复用旧产物）。`--force-thumbnails` 依然可用于强制刷一遍；**别用 `--force-manifest` 刷参数**——它只让照片进队列，缩略图仍会在 `data-processors` 的快路径被判为可复用，结果是占位图换了、缩略图没换的混合状态。
+- `--dry-run` 不落盘，也不再写产物签名；否则下次构建会以为磁盘上已经是新参数的产物而永久跳过。
+- **同名覆盖 + CDN**：位深变了但文件名没变，所以这次是**原地覆盖**：manifest 逐字节不变，`pnpm cleanup:assets` 也不会删任何东西（它按扩展名判定旧格式）。想让用户真的拿到新字节，必须去 CDN 刷新 `.afilmory/thumbnails/*` 与 `.afilmory/previews/*`（浏览器侧还有 `max-age=86400`）。
+- **验证位深只能读容器**：`thumbnailUrl`/`previewUrl` 的 HTTP 头一律是 `image/avif`，位深在 AVIF 的 `pixi` 盒（或 `av1C` 的 `high_bitdepth` 位）里。抽样时对每个 URL 额外带一个 query 命中回源（实测带 query 会 `EO-Cache-Status: MISS`，与下面「忽略 query string」的旧记录不一致，规则可能已经改过），再解析前若干字节，才能区分「源站换了」和「CDN 还在发旧字节」。
 - 远端存储里的旧格式对象**不会**自动删（`thumbnail-storage` 把自己的前缀排除在扫描外）：用 `pnpm cleanup:assets` 统计，`-- --delete` 清缩略图，其他目录加 `--directory=.afilmory/og-images --keep=webp`。**先确认线上 manifest 已经不引用旧格式再删**。
 - 缩略图 / 占位图 / OG 卡上传时会带 `Cache-Control: public, max-age=86400, stale-while-revalidate=604800`
   （`packages/builder/src/plugins/thumbnail-storage/shared.ts` 的 `MEDIA_CACHE_CONTROL`）。
