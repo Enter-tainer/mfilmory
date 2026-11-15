@@ -13,7 +13,7 @@ import type { S3CompatibleConfig, StorageConfig } from '../../storage/interfaces
 import type { ThumbnailPluginData } from '../thumbnail-storage/shared.js'
 import { MEDIA_CACHE_CONTROL, PREVIEW_PLUGIN_DATA_KEY, THUMBNAIL_PLUGIN_DATA_KEY } from '../thumbnail-storage/shared.js'
 import type { BuilderPlugin } from '../types.js'
-import { PHOTO_OG_WEBP_QUALITY, renderPhotoOgImage } from './photo-og.js'
+import { PHOTO_OG_LAYOUT_VERSION, PHOTO_OG_WEBP_QUALITY, renderPhotoOgImage } from './photo-og.js'
 import type { CloudflareMiddlewareVendorConfig } from './vendors/cloudflare-moddleware.js'
 import { CloudflareMiddlewareVendor } from './vendors/cloudflare-moddleware.js'
 import type { OgVendor } from './vendors/types'
@@ -126,7 +126,7 @@ async function readLocalPublicFile(url: string): Promise<Buffer | null> {
 /**
  * 找一份够大的照片源。
  *
- * 分享图是 1200×630 满幅，600px 的缩略图会被放大到发糊，所以优先用 2560px 的
+ * 分享图横边上限是 1200（按原图比例、不裁切），600px 的缩略图会被放大到发糊，所以优先用 2560px 的
  * 阅览器占位图（preview）；只有它缺失时才退回缩略图。两者都由上一个插件
  * （thumbnail-storage）在内存里准备好，正常一次构建不需要额外读盘或联网。
  */
@@ -256,7 +256,8 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
 
         const state = getOrCreateRunState(runShared)
 
-        const ogSignature = `photo-straight-webp-q${PHOTO_OG_WEBP_QUALITY}`
+        // 签名把构图策略版本也带进来：改了裁切逻辑后旧卡片必须重渲染，不能因为键还在就复用
+        const ogSignature = `photo-straight-${PHOTO_OG_LAYOUT_VERSION}-webp-q${PHOTO_OG_WEBP_QUALITY}`
         const canReuse
           = !payload.options.isForceMode
             && !payload.options.isForceManifest

@@ -45,7 +45,7 @@
 - `thumbnail-storage/`：缩略图上传
 - `geocoding.js`：照片地点反查（`geocodingPlugin`）
 - `github-repo-sync.js`：把 manifest / 缩略图写回 GitHub 仓库
-- `og-image-storage/`：**分享图插件**。卡片就是照片本身（1200×630 满幅 WebP，**不画**黑底/站名/标题），文字交给分享平台原生渲染。其中 `vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk` 就是 **Cloudflare Pages 中间件**，负责两件事：① 拦截 `/photos/:slug` 的 HTML，把 `og:image` / `twitter:image` 重写到 R2 上的 `.afilmory/og-images/*.webp`，并按 manifest 注入每张照片的 `og:title` / `og:description`（多行 `📸 / 📝 / 📅 / 🗺 / 📍` EXIF 明细）、`<title>` 和单行 `meta[name=description]`；② 把分享弹窗用的站内路径 `/og/:photoId` **302** 到同一张 R2 WebP（运行时 manifest 裁掉了 `ogImageUrl`，这样既不用下发给浏览器、也不会让图片破图）
+- `og-image-storage/`：**分享图插件**。卡片就是照片本身（按原图比例、横边上限 1200 的 WebP，不裁切、**不画**黑底/站名/标题），文字交给分享平台原生渲染。其中 `vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk` 就是 **Cloudflare Pages 中间件**，负责两件事：① 拦截 `/photos/:slug` 的 HTML，把 `og:image` / `twitter:image` 重写到 R2 上的 `.afilmory/og-images/*.webp`，并按 manifest 注入每张照片的 `og:title` / `og:description`（多行 `📸 / 📝 / 📅 / 🗺 / 📍` EXIF 明细）、`<title>` 和单行 `meta[name=description]`；② 把分享弹窗用的站内路径 `/og/:photoId` **302** 到同一张 R2 WebP（运行时 manifest 裁掉了 `ogImageUrl`，这样既不用下发给浏览器、也不会让图片破图）
   - 文案规则在 `packages/builder/src/plugins/og-image-storage/photo-text.ts`；照片直放（裁切/缩放）在 `photo-og.ts`
   - 产物写到仓库根 `functions/_middleware.ts`，由 `builder.config.ts` 里的 `ogImagePlugin({ vendor: { type: 'cloudflare-middleware', storageURL } })` 触发
   - 该文件是**构建产物，不提交**（`.gitignore` 只忽略这精确一个路径）；内容由 `config.json` 的 `url` + `builder.config.ts` 的 `storageURL`（通常即 `.env` 的 `S3_CUSTOM_DOMAIN`）决定。`pnpm build` 会自动生成，也可以用 `pnpm og:middleware` 单独重生成（`-- --check` 校验磁盘上的文件是否最新，**并校验中间件处理的路径（`/photos/*`、`/og/*`）都写进了 `_routes.json` 的 include**；`--storage-url=…` 临时覆盖 CDN 地址）
@@ -118,7 +118,7 @@ pnpm build            # 把 manifest 外置成 photos-manifest.<hash>.json，产
 | --- | --- | --- | --- |
 | 缩略图（网格，`500px` 宽） | **AVIF 10-bit** | `quality: 70`, `effort: 6`, `bitdepth: 10` | 网格一格最多显示 500 物理像素（手机 150 CSS@3x、iPad/Mac 250 CSS@2x、4K@100% 472px），所以 500 正好。实测 SSIMULACRA2 83.5 vs 旧 600px JPEG q100 的 85.6（98% 观感），体积 32KB vs 248KB |
 | 占位图（阅览器，长边 `2560`） | **AVIF 10-bit** | `quality: 45`, `effort: 6`, `bitdepth: 10` | 点开大图时先显示它，原图下完无缝替换。4K 全屏实测 S2 27.3 / XPSNR 37.8 / SSIM 0.80，旧 600px JPEG q100 占位只有 −16.1 / 33.9 / 0.70，而体积还小 17%。按**长边**而非宽度缩放，竖图不会白付 1.5 倍像素 |
-| OG 卡（分享图） | **WebP** | `quality: 88` | 1200×630，**照片满幅、无底色无文字**（站点级从近期横向照片里挑一张）。PNG 时代 421KB → WebP ~30–180KB。**OG 永远不要用 AVIF**：跨平台实测只有 Facebook 支持 |
+| OG 卡（分享图） | **WebP** | `quality: 88` | 按原图比例、**横边上限 1200**（>1200 缩、≤1200 不放大、不裁切），**无底色无文字**；站点级是独立的 1200×630 横幅（从近期横向照片里挑一张）。PNG 时代 421KB → WebP ~30–180KB。**OG 永远不要用 AVIF**：跨平台实测只有 Facebook 支持 |
 
 编码器是 sharp（libvips 8.18.7 → libheif 1.23.5 → libaom 3.15.1）。`effort` 是 libaom 速度档（0–9），6 比默认 4 慢但同质量更小。**产物文件名不含编码参数**（`<photoId>.avif`），所以「参数变了要不要重编」完全靠 `apps/web/src/data/.cache/asset-signatures.json` 里的签名：入口门禁（`filterTaskImages`）和编码函数都以它为准，只看「文件在不在」是不够的。
 
@@ -157,7 +157,7 @@ pnpm build            # 把 manifest 外置成 photos-manifest.<hash>.json，产
   **文件名里带内容哈希**的资源成立；而这里的文件名是「日期+相机编号」，重新导出同一张照片时
   文件名不变、内容会变，用 `immutable` 会让回访用户最长一年看不到新图。
   存量对象补头用 `pnpm refresh:cache -- --apply`（`CopyObject` 原地改元数据、零出网流量）。
-- 分享图不走 Satori/resvg，直接用 sharp 从 2560px 的占位图（preview）缩放出 1200×630 WebP：源图够大、不用再解码重编码成 PNG，也不依赖构建机装中文字体。
+- 分享图不走 Satori/resvg，直接用 sharp 从 2560px 的占位图（preview）按原图比例缩放出 WebP（横边上限 1200，不裁切）：源图够大、不用再解码重编码成 PNG，也不依赖构建机装中文字体。
 - 原图与产物都有缓存：下载过的原图存在 `apps/web/src/data/.cache/originals/`，每张照片每种产物用哪组参数编码记录在 `.cache/asset-signatures.json`。只改一档参数时其他档不会重算。`MFILMORY_NO_ORIGINAL_CACHE=1` 跳过原图缓存，`MFILMORY_FORCE_ENCODE=1` 强制重编码。
 
 #### AVIF 作为**输入**（照片本身就是 .avif）

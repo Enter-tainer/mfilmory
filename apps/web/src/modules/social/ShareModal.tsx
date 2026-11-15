@@ -12,8 +12,16 @@ import type { PhotoManifest } from '~/types/photo'
 import { CopyButton } from './CopyButton'
 import { ShareActionButton } from './ShareActionButton'
 
-// 分享图比例 1200:630（照片直放，见 packages/builder/src/plugins/og-image-storage/photo-og.ts）
-const OG_ASPECT_RATIO = 1200 / 630
+// 分享图按原图比例、横边上限 1200（见 packages/builder/src/plugins/og-image-storage/photo-og.ts），
+// 预览框直接跟随照片比例；缺尺寸时退回 1.91:1 兜底
+const FALLBACK_OG_ASPECT_RATIO = 1200 / 630
+
+function getOgAspectRatio(photo: PhotoManifest): number {
+  if (!photo.width || !photo.height) {
+    return FALLBACK_OG_ASPECT_RATIO
+  }
+  return photo.width / photo.height
+}
 
 interface ShareModalTriggerProps {
   photo: PhotoManifest
@@ -90,6 +98,7 @@ const ShareSheet: ModalComponent<ShareSheetProps> = ({ photo, blobSrc, dismiss }
 
   const shareTitle = photo.title || t('photo.share.default.title')
   const shareText = t('photo.share.text', { title: shareTitle })
+  const ogAspectRatio = getOgAspectRatio(photo)
 
   const canUseNativeShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function'
 
@@ -198,7 +207,7 @@ const ShareSheet: ModalComponent<ShareSheetProps> = ({ photo, blobSrc, dismiss }
         <p className="text-xs font-medium text-white/50">{t('photo.share.preview')}</p>
         <div className="relative overflow-hidden rounded-xl border border-white/10 bg-black/40">
           {/* Fixed aspect ratio placeholder to prevent CLS */}
-          <div className="w-full" style={{ aspectRatio: OG_ASPECT_RATIO }}>
+          <div className="w-full" style={{ aspectRatio: ogAspectRatio }}>
             {isOgImageLoading && (
               <div className="absolute inset-0 flex items-center justify-center bg-white/5">
                 <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white/60" />
