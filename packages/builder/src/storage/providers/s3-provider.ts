@@ -303,7 +303,13 @@ export class S3StorageProvider implements StorageProvider {
   }
 
   private async listObjects(prefix?: string): Promise<StorageObject[]> {
-    const maxTotal = this.config.maxFileLimit
+    // 0 / 负数 / 未配置 都表示「不限制」：之前 `maxFileLimit: 0` 会算成「只取一页」，
+    // 而 1000（默认模板的值）会让 shouldPaginate 为 false，直接丢掉第二页之后的
+    // 所有对象且**不报错**——桶里 1489 个对象时等于静默少掉 489 个。
+    const configuredLimit = this.config.maxFileLimit
+    const maxTotal = configuredLimit !== undefined && configuredLimit !== null && configuredLimit > 0
+      ? configuredLimit
+      : undefined
     const shouldPaginate = maxTotal === undefined || maxTotal > 1000
     const all: StorageObject[] = []
     let continuationToken: string | null = null
@@ -313,6 +319,12 @@ export class S3StorageProvider implements StorageProvider {
       all.push(...objects)
 
       if (maxTotal && all.length >= maxTotal) {
+        if (isTruncated || nextContinuationToken) {
+          logger.main.warn(
+            `对象列表已达到 maxFileLimit=${maxTotal} 并被截断：桶里还有更多对象没有被列出。`
+            + ' 照片会被漏处理（manifest 随之变少），请调大 maxFileLimit，或设为 0 表示不限制。',
+          )
+        }
         break
       }
 
@@ -330,7 +342,8 @@ export class S3StorageProvider implements StorageProvider {
     prefix?: string,
     continuationToken?: string | null,
   ): Promise<{ objects: StorageObject[]; nextContinuationToken: string | null; isTruncated: boolean }> {
-    const maxKeysPerRequest = this.config.maxFileLimit ? Math.min(this.config.maxFileLimit, 1000) : 1000
+    const limit = this.config.maxFileLimit
+    const maxKeysPerRequest = limit !== undefined && limit !== null && limit > 0 ? Math.min(limit, 1000) : 1000
     const response = await this.client.listObjects({
       prefix: prefix ?? this.config.prefix,
       maxKeys: maxKeysPerRequest,
