@@ -12,12 +12,21 @@ export interface LoadBuilderConfigOptions {
 }
 
 function applySystemOverrides(target: BuilderConfig['system'], overrides?: BuilderConfigInput['system']): void {
-  if (!overrides) return
+  if (!overrides) { return }
 
   if (overrides.processing) {
     const { processing } = overrides
-    if (typeof processing.defaultConcurrency === 'number') {
-      target.processing.defaultConcurrency = processing.defaultConcurrency
+    if (processing.cpuConcurrency === 'auto' || typeof processing.cpuConcurrency === 'number') {
+      target.processing.cpuConcurrency = processing.cpuConcurrency
+    }
+    if (processing.sharpConcurrency === 'auto' || typeof processing.sharpConcurrency === 'number') {
+      target.processing.sharpConcurrency = processing.sharpConcurrency
+    }
+    if (processing.cpuWorkerCount === 'auto' || typeof processing.cpuWorkerCount === 'number') {
+      target.processing.cpuWorkerCount = processing.cpuWorkerCount
+    }
+    if (typeof processing.networkConcurrency === 'number') {
+      target.processing.networkConcurrency = processing.networkConcurrency
     }
     if (typeof processing.enableLivePhotoDetection === 'boolean') {
       target.processing.enableLivePhotoDetection = processing.enableLivePhotoDetection
@@ -53,12 +62,6 @@ function applySystemOverrides(target: BuilderConfig['system'], overrides?: Build
         ...observability.logging,
       }
     }
-    if (observability.performance?.worker) {
-      target.observability.performance.worker = {
-        ...target.observability.performance.worker,
-        ...observability.performance.worker,
-      }
-    }
   }
 }
 
@@ -72,7 +75,7 @@ function ensureUserSettings(target: BuilderConfig): UserBuilderSettings {
 }
 
 function applyUserOverrides(target: BuilderConfig, overrides?: BuilderConfigInput['user']): void {
-  if (!overrides) return
+  if (!overrides) { return }
   const user = ensureUserSettings(target)
 
   if (overrides.storage !== undefined) {

@@ -1,5 +1,3 @@
-import os from 'node:os'
-
 import { defineBuilderConfig, githubRepoSyncPlugin } from '@afilmory/builder'
 
 import { env } from './env.js'
@@ -32,7 +30,10 @@ export default defineBuilderConfig(() => ({
   },
   system: {
     processing: {
-      defaultConcurrency: 10,
+      cpuConcurrency: 'auto',
+      sharpConcurrency: 'auto',
+      cpuWorkerCount: 'auto',
+      networkConcurrency: 16,
       enableLivePhotoDetection: true,
       digestSuffixLength: 8,
       xmp: {
@@ -47,14 +48,6 @@ export default defineBuilderConfig(() => ({
         verbose: false,
         level: 'info',
         outputToFile: false,
-      },
-      performance: {
-        worker: {
-          workerCount: os.cpus().length * 2,
-          timeout: 30_000,
-          useClusterMode: true,
-          workerConcurrency: 2,
-        },
       },
     },
   },

@@ -4,6 +4,7 @@ import type { AfilmoryBuilder, BuilderOptions } from '../builder/builder.js'
 import { logger } from '../logger/index.js'
 import type { PluginRunState } from '../plugins/manager.js'
 import type { S3ObjectLike } from '../types/s3.js'
+import type { BuilderRuntimePools } from './execution-context.js'
 import { createStorageKeyNormalizer, runWithPhotoExecutionContext } from './execution-context.js'
 import type { PhotoProcessingContext } from './image-pipeline.js'
 import { processPhotoWithPipeline } from './image-pipeline.js'
@@ -31,10 +32,13 @@ export async function processPhoto(
   pluginRuntime: {
     runState: PluginRunState
     builderOptions: BuilderOptions
+    pools?: BuilderRuntimePools
+    releaseStage1Gate?: () => void
   },
 ): Promise<ProcessPhotoResult> {
   const key = obj.Key
   if (!key) {
+    pluginRuntime.releaseStage1Gate?.()
     logger.image.warn(`跳过没有 Key 的对象`)
     return { item: null, type: 'failed' }
   }
@@ -62,6 +66,7 @@ export async function processPhoto(
       storageConfig,
       normalizeStorageKey: createStorageKeyNormalizer(storageConfig),
       loggers: photoLoggers,
+      pools: pluginRuntime.pools ?? builder.getRuntimePools(),
     },
     async () => {
       photoLoggers.image.info(`📸 [${index + 1}/${totalImages}] ${key}`)

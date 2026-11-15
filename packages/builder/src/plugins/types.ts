@@ -1,7 +1,15 @@
-import type { AfilmoryManifest, CameraInfo, LensInfo, PhotoManifestItem, ProcessPhotoResult  } from '@afilmory/typing'
+import type {
+  AfilmoryManifest,
+  CameraInfo,
+  LensInfo,
+  PhotoManifestItem,
+  PickedExif,
+  ProcessPhotoResult,
+} from '@afilmory/typing'
 
 import type { AfilmoryBuilder, BuilderOptions, BuilderResult } from '../builder/builder.js'
 import type { Logger } from '../logger/index.js'
+import type { BuilderRuntimePools } from '../photo/execution-context.js'
 import type { PhotoProcessingContext } from '../photo/image-pipeline.js'
 import type { PhotoProcessorOptions } from '../photo/processor.js'
 import type { StorageObject } from '../storage/interfaces.js'
@@ -32,6 +40,14 @@ export interface BuilderPluginEventPayloads {
   beforePhotoProcess: {
     options: BuilderOptions
     context: PhotoProcessingContext
+  }
+  onExifExtracted: {
+    options: BuilderOptions
+    context: PhotoProcessingContext
+    itemId: string
+    photoKey: string
+    exif: PickedExif | null
+    existingItem?: PhotoManifestItem
   }
   afterPhotoProcess: {
     options: BuilderOptions
@@ -73,7 +89,7 @@ export interface BuilderPluginEventPayloads {
     options: BuilderOptions
     tasks: StorageObject[]
     processorOptions: PhotoProcessorOptions
-    mode: 'cluster' | 'worker'
+    mode: 'cpu-worker' | 'in-process'
     concurrency: number
   }
   afterProcessTasks: {
@@ -129,6 +145,7 @@ export interface BuilderPluginHookContext<TEvent extends BuilderPluginEvent> {
   logger: Logger
   options: BuilderOptions
   registerStorageProvider: AfilmoryBuilder['registerStorageProvider']
+  pools?: BuilderRuntimePools
   /**
    * Name of the plugin handling the current hook.
    */
@@ -163,10 +180,10 @@ export interface BuilderPlugin {
   hooks?: BuilderPluginHooks
 }
 
-export type BuilderPluginFactory =
-  | BuilderPlugin
-  | (() => BuilderPlugin | Promise<BuilderPlugin>)
-  | ((options: unknown) => BuilderPlugin | Promise<BuilderPlugin>)
+export type BuilderPluginFactory
+  = | BuilderPlugin
+    | (() => BuilderPlugin | Promise<BuilderPlugin>)
+    | ((options: unknown) => BuilderPlugin | Promise<BuilderPlugin>)
 
 export function isPluginESMImporter(value: BuilderPluginConfigEntry): value is BuilderPluginESMImporter {
   return typeof value === 'function' && value.length === 0

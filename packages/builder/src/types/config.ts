@@ -8,20 +8,29 @@ export interface LoggingConfig {
   logFilePath?: string
 }
 
-export interface WorkerPerformanceConfig {
-  timeout: number
-  useClusterMode: boolean
-  workerConcurrency: number
-  workerCount: number
-}
-
 export interface XmpProcessingSettings {
   keywords: boolean
   regions: boolean
 }
 
 export interface SystemProcessingSettings {
-  defaultConcurrency: number
+  /**
+   * 并发纯 CPU 任务槽位数（`'auto'` 默认取 CPU 逻辑核数）。
+   */
+  cpuConcurrency: number | 'auto'
+  /**
+   * 单个 sharp 任务内部使用的 libvips 线程数（透传到 `sharp.concurrency()`）。
+   * - `'auto'`（默认）：待处理数 >= CPU 核数时取 `1`（总 CPU 开销最低）；小批量时自动放大（最高 4）以压低尾延迟。
+   */
+  sharpConcurrency: number | 'auto'
+  /**
+   * 纯 CPU 子进程数（`'auto'` 按核数拆出少数轻量子进程隔离 sharp/WASM 对主进程 libuv 的阻塞；`0` 表示同进程执行）。
+   */
+  cpuWorkerCount: number | 'auto'
+  /**
+   * 网络池并发上限（用于下载/上传限流；S3 下载仍优先读取 storage.downloadConcurrency）。
+   */
+  networkConcurrency: number
   enableLivePhotoDetection: boolean
   xmp?: XmpProcessingSettings
   supportedFormats?: Set<string>
@@ -40,9 +49,6 @@ export interface SystemObservabilitySettings {
   showProgress: boolean
   showDetailedStats: boolean
   logging: LoggingConfig
-  performance: {
-    worker: WorkerPerformanceConfig
-  }
 }
 
 export interface SystemBuilderSettings {
@@ -62,8 +68,8 @@ export interface BuilderConfig {
 
 type DeepPartial<T> = T extends object
   ? {
-    [P in keyof T]?: DeepPartial<T[P]>
-  }
+      [P in keyof T]?: DeepPartial<T[P]>
+    }
   : T
 
 export type BuilderConfigInput = {

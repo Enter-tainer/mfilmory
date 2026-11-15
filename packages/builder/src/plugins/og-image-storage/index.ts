@@ -59,7 +59,7 @@ function normalizeDirectory(directory: string | undefined): string {
 }
 
 function trimSlashes(value: string | undefined | null): string | null {
-  if (!value) return null
+  if (!value) { return null }
   const normalized = value.replaceAll('\\', '/').replaceAll(/^\/+|\/+$/g, '')
   return normalized.length > 0 ? normalized : null
 }
@@ -112,7 +112,7 @@ function createVendor(config: OgVendorConfig): OgVendor {
 }
 
 async function readLocalPublicFile(url: string): Promise<Buffer | null> {
-  if (/^https?:\/\//i.test(url)) return null
+  if (/^https?:\/\//i.test(url)) { return null }
 
   const localPath = path.join(workdir, 'public', url.replace(/^\/+/, ''))
   try {
@@ -137,7 +137,7 @@ async function resolvePhotoSource(
   logger: Logger,
 ): Promise<Buffer | null> {
   for (const buffer of [previewData?.buffer, thumbnailData?.buffer]) {
-    if (buffer && buffer.length > 0) return buffer
+    if (buffer && buffer.length > 0) { return buffer }
   }
 
   const urls = [previewData?.localUrl, item.previewUrl, thumbnailData?.localUrl, item.thumbnailUrl]
@@ -146,13 +146,13 @@ async function resolvePhotoSource(
     if (!url) { continue }
 
     const local = await readLocalPublicFile(url)
-    if (local) return local
+    if (local) { return local }
 
     if (!/^https?:\/\//i.test(url)) { continue }
 
     try {
       const response = await fetch(url)
-      if (response.ok) return Buffer.from(await response.arrayBuffer())
+      if (response.ok) { return Buffer.from(await response.arrayBuffer()) }
     }
     catch (error) {
       logger.main.debug?.(`OG image plugin: could not fetch ${url}`, error)
@@ -238,7 +238,7 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
           externalStorageManager = new StorageManager(uploadableConfig)
         }
       },
-      afterPhotoProcess: async ({ builder, payload, runShared, logger }) => {
+      afterPhotoProcess: async ({ builder, payload, runShared, logger, pools }) => {
         if (!resolved || !resolved.enabled) {
           return
         }
@@ -289,7 +289,7 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
         }
 
         try {
-          const webp = await renderPhotoOgImage(source)
+          const webp = pools ? await pools.cpu.runOgRender(source) : await renderPhotoOgImage(source)
 
           const stateForUpload = state
           if (
@@ -298,10 +298,13 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
             || payload.options.isForceManifest
           ) {
             try {
-              await storageManager.uploadFile(remoteKey, webp, {
-                cacheControl: MEDIA_CACHE_CONTROL,
-                contentType: resolved.contentType,
-              })
+              const { contentType } = resolved
+              const uploadOg = () =>
+                storageManager.uploadFile(remoteKey, webp, {
+                  cacheControl: MEDIA_CACHE_CONTROL,
+                  contentType,
+                })
+              await (pools ? pools.network.upload(uploadOg) : uploadOg())
               stateForUpload.uploaded.add(remoteKey)
             }
             catch (error) {
@@ -330,7 +333,7 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
         }
       },
       afterBuild: async ({ logger }) => {
-        if (!vendor) return
+        if (!vendor) { return }
 
         try {
           await vendor.build({ repoRoot, logger })

@@ -1,5 +1,6 @@
 import type { Buffer } from 'node:buffer'
 import { mkdir, unlink, writeFile } from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 
@@ -16,6 +17,8 @@ import type { ExifDateTime, Tags } from 'exiftool-vendored'
 import { ExifTool } from 'exiftool-vendored'
 
 import { getGlobalLoggers } from '../photo/logger-adapter.js'
+
+const EXIF_TEMP_DIR = path.join(os.tmpdir(), 'afilmory-exif')
 
 const exiftool = new ExifTool({
   ...(process.env.EXIFTOOL_PATH ? { exiftoolPath: process.env.EXIFTOOL_PATH } : {}),
@@ -42,18 +45,33 @@ if (process.env.NODE_ENV !== 'development') {
   process.once('SIGTERM', closeExiftool)
 }
 
-// 提取 EXIF 数据
-export async function extractExifData(imageBuffer: Buffer, originalBuffer?: Buffer): Promise<PickedExif | null> {
+export async function shutdownExiftool(): Promise<void> {
+  if (isExiftoolClosed) { return }
+  isExiftoolClosed = true
+  await exiftool.end().catch(noop)
+}
+
+// 提取 EXIF 数据；若原图已落盘（如 original-cache），直接读文件省去一次临时写入
+export async function extractExifData(
+  imageBuffer: Buffer,
+  originalBuffer?: Buffer,
+  sourcePath?: string,
+): Promise<PickedExif | null> {
   const log = getGlobalLoggers().exif
 
-  await mkdir('/tmp/image_process', { recursive: true })
-  const tempImagePath = path.resolve('/tmp/image_process', `${crypto.randomUUID()}.jpg`)
+  let tempImagePath: string | null = null
+  let readTarget = sourcePath
 
   try {
-    await writeFile(tempImagePath, originalBuffer || imageBuffer)
+    if (!readTarget) {
+      await mkdir(EXIF_TEMP_DIR, { recursive: true })
+      tempImagePath = path.join(EXIF_TEMP_DIR, `${crypto.randomUUID()}.jpg`)
+      await writeFile(tempImagePath, originalBuffer || imageBuffer)
+      readTarget = tempImagePath
+    }
 
-    log.info(`开始提取 EXIF 数据, 文件路径: ${tempImagePath}`)
-    const exifData = await exiftool.read(tempImagePath)
+    log.info(`开始提取 EXIF 数据, 文件路径: ${readTarget}`)
+    const exifData = await exiftool.read(readTarget)
 
     const result = handleExifData(exifData)
 
@@ -75,7 +93,9 @@ export async function extractExifData(imageBuffer: Buffer, originalBuffer?: Buff
     return null
   }
   finally {
-    await unlink(tempImagePath).catch(noop)
+    if (tempImagePath) {
+      await unlink(tempImagePath).catch(noop)
+    }
   }
 }
 

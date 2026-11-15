@@ -47,7 +47,7 @@ export class PluginManager {
 
       for (const plugin of this.plugins) {
         const initHook = plugin.hooks.onInit
-        if (!initHook) continue
+        if (!initHook) { continue }
 
         try {
           await initHook({
@@ -57,7 +57,8 @@ export class PluginManager {
             registerStorageProvider: builder.registerStorageProvider.bind(builder),
             pluginOptions: plugin.pluginOptions,
           })
-        } catch (error) {
+        }
+        catch (error) {
           logger.main.error(`[Builder Plugin] 初始化插件 "${plugin.name}" 失败`, error)
           throw error
         }
@@ -73,13 +74,13 @@ export class PluginManager {
     event: TEvent,
     payload: BuilderPluginEventPayloads[TEvent],
   ): Promise<void> {
-    if (this.plugins.length === 0) return
+    if (this.plugins.length === 0) { return }
 
     for (const plugin of this.plugins) {
       const hook = plugin.hooks[event] as
         | ((context: BuilderPluginHookContext<TEvent>) => void | Promise<void>)
         | undefined
-      if (!hook) continue
+      if (!hook) { continue }
 
       const sharedKey = plugin.name
       let shared = runState.get(sharedKey)
@@ -93,6 +94,7 @@ export class PluginManager {
         config: builder.getConfig(),
         logger,
         registerStorageProvider: builder.registerStorageProvider.bind(builder),
+        pools: builder.getRuntimePools(),
         options: payload.options,
         pluginName: plugin.name,
         pluginOptions: plugin.pluginOptions,
@@ -103,7 +105,8 @@ export class PluginManager {
 
       try {
         await hook(context)
-      } catch (error) {
+      }
+      catch (error) {
         logger.main.error(`[Builder Plugin] 插件 "${plugin.name}" 在 ${event} 钩子中抛出错误`, error)
         throw error
       }

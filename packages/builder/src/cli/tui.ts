@@ -1,4 +1,3 @@
-/* eslint-disable unicorn/prefer-single-call */
 import { format as utilFormat } from 'node:util'
 
 import type {
@@ -14,7 +13,7 @@ type RunStatus = 'idle' | 'running' | 'success' | 'error'
 interface RunMetadata {
   runMode: string
   concurrency: number
-  processingMode: 'cluster' | 'worker'
+  processingMode: BuildProgressStartPayload['mode']
 }
 
 interface ProgressState extends BuildProgressSnapshot {}
@@ -45,6 +44,7 @@ export class BuilderTUI {
     error: null,
     logs: [],
   }
+
   private lastFrame = ''
   private isAttached = false
   private startTimestamp: number | null = null
@@ -54,14 +54,14 @@ export class BuilderTUI {
   }
 
   attach(): void {
-    if (this.isAttached) return
+    if (this.isAttached) { return }
     this.isAttached = true
     this.hideCursor()
     this.render(true)
   }
 
   detach(): void {
-    if (!this.isAttached) return
+    if (!this.isAttached) { return }
     this.clearScreen()
     this.showCursor()
     this.isAttached = false
@@ -70,7 +70,8 @@ export class BuilderTUI {
     if (this.state.status === 'success' && this.state.summary) {
       const summaryLine = this.formatSuccessSummary(this.state.summary)
       this.stream.write(`${summaryLine}\n`)
-    } else if (this.state.status === 'error' && this.state.error) {
+    }
+    else if (this.state.status === 'error' && this.state.error) {
       this.stream.write(`${color('构建失败：', 'red')}${this.state.error}\n`)
     }
   }
@@ -94,6 +95,13 @@ export class BuilderTUI {
       onStart: (payload: BuildProgressStartPayload) => {
         this.startTimestamp = Date.now()
         this.state.status = 'running'
+        if (this.state.runMeta) {
+          this.state.runMeta = {
+            ...this.state.runMeta,
+            concurrency: payload.concurrency,
+            processingMode: payload.mode,
+          }
+        }
         this.state.progress = {
           total: payload.total,
           completed: 0,
@@ -133,7 +141,7 @@ export class BuilderTUI {
   }
 
   private render(force = false): void {
-    if (!this.isAttached) return
+    if (!this.isAttached) { return }
 
     const frame = this.composeFrame()
     if (!force && frame === this.lastFrame) {
@@ -169,7 +177,7 @@ export class BuilderTUI {
     const parts = [
       color('📸 Afilmory Builder', 'cyan'),
       `模式: ${color(meta.runMode, 'green')}`,
-      `处理: ${color(meta.processingMode === 'cluster' ? '多进程集群' : '并发线程池', 'green')}`,
+      `处理: ${color(meta.processingMode === 'cpu-worker' ? '多进程 CPU 池' : '同进程', 'green')}`,
       `并发: ${color(String(meta.concurrency), 'green')}`,
     ]
     const header = parts.join(' · ')
@@ -244,30 +252,30 @@ export class BuilderTUI {
   }
 
   private clearScreen(): void {
-    this.stream.write('\u001b[0;0H')
-    this.stream.write('\u001b[2J')
+    this.stream.write('\u001B[0;0H')
+    this.stream.write('\u001B[2J')
   }
 
   private hideCursor(): void {
-    this.stream.write('\u001b[?25l')
+    this.stream.write('\u001B[?25l')
   }
 
   private showCursor(): void {
-    this.stream.write('\u001b[?25h')
+    this.stream.write('\u001B[?25h')
   }
 }
 
 function color(text: string, tone: 'cyan' | 'green' | 'yellow' | 'red' | 'gray' | 'blue' | 'magenta'): string {
   const codes: Record<typeof tone, string> = {
-    cyan: '\u001b[36m',
-    green: '\u001b[32m',
-    yellow: '\u001b[33m',
-    red: '\u001b[31m',
-    gray: '\u001b[90m',
-    blue: '\u001b[34m',
-    magenta: '\u001b[35m',
+    cyan: '\u001B[36m',
+    green: '\u001B[32m',
+    yellow: '\u001B[33m',
+    red: '\u001B[31m',
+    gray: '\u001B[90m',
+    blue: '\u001B[34m',
+    magenta: '\u001B[35m',
   } as const
-  return `${codes[tone]}${text}\u001b[0m`
+  return `${codes[tone]}${text}\u001B[0m`
 }
 
 function formatLevel(level: string): string {

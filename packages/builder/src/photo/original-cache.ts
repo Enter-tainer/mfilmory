@@ -31,25 +31,31 @@ function cacheEnabled(): boolean {
 function looksComplete(buffer: Buffer, key: string): boolean {
   const extension = key.slice(key.lastIndexOf('.') + 1).toLowerCase()
   if (extension === 'jpg' || extension === 'jpeg') {
-    if (buffer.length < 4) return false
-    return buffer[buffer.length - 2] === 0xFF && buffer[buffer.length - 1] === 0xD9
+    if (buffer.length < 4) { return false }
+    return buffer[buffer.length - 2] === 0xFF && buffer.at(-1) === 0xD9
   }
   return buffer.length > 0
 }
 
-export async function getOriginalWithCache(
+export interface OriginalCacheEntry {
+  buffer: Buffer
+  filePath?: string
+}
+
+export async function getOriginalWithCacheEntry(
   key: string,
   fetcher: () => Promise<Buffer | null>,
-): Promise<Buffer | null> {
+): Promise<OriginalCacheEntry | null> {
   if (!cacheEnabled()) {
-    return fetcher()
+    const buffer = await fetcher()
+    return buffer ? { buffer } : null
   }
 
   const filePath = path.join(CACHE_DIR, key)
   try {
     const cached = await fs.readFile(filePath)
     if (looksComplete(cached, key)) {
-      return cached
+      return { buffer: cached, filePath }
     }
     // 截断的缓存：删掉重下，否则每次重建都会在 sharp 里失败
     await fs.rm(filePath, { force: true })
@@ -59,11 +65,23 @@ export async function getOriginalWithCache(
   }
 
   const buffer = await fetcher()
-  if (buffer) {
-    await fs.mkdir(path.dirname(filePath), { recursive: true })
-    await fs.writeFile(filePath, buffer)
+  if (!buffer) {
+    return null
   }
-  return buffer
+
+  await fs.mkdir(path.dirname(filePath), { recursive: true })
+  const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`
+  await fs.writeFile(tmpPath, buffer)
+  await fs.rename(tmpPath, filePath)
+  return { buffer, filePath }
+}
+
+export async function getOriginalWithCache(
+  key: string,
+  fetcher: () => Promise<Buffer | null>,
+): Promise<Buffer | null> {
+  const entry = await getOriginalWithCacheEntry(key, fetcher)
+  return entry?.buffer ?? null
 }
 
 export async function clearOriginalCache(): Promise<void> {

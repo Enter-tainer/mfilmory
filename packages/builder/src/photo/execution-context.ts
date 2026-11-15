@@ -3,7 +3,14 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import type { AfilmoryBuilder } from '../builder/builder.js'
 import type { StorageManager } from '../storage/index.js'
 import type { B2Config, GitHubConfig, S3CompatibleConfig, StorageConfig } from '../storage/interfaces.js'
+import type { CpuPool } from '../worker/cpu-pool.js'
+import type { NetworkPool } from '../worker/network-pool.js'
 import type { PhotoProcessingLoggers } from './logger-adapter.js'
+
+export interface BuilderRuntimePools {
+  cpu: CpuPool
+  network: NetworkPool
+}
 
 export interface PhotoExecutionContext {
   builder: AfilmoryBuilder
@@ -12,6 +19,7 @@ export interface PhotoExecutionContext {
   normalizeStorageKey: (key: string) => string
   loggers?: PhotoProcessingLoggers
   prefetchedBuffers?: Map<string, Buffer>
+  pools?: BuilderRuntimePools
 }
 
 const photoContextStorage = new AsyncLocalStorage<PhotoExecutionContext>()
@@ -32,7 +40,7 @@ export function getPhotoExecutionContext(): PhotoExecutionContext {
 }
 
 function sanitizeStoragePath(value: string | undefined | null): string {
-  if (!value) return ''
+  if (!value) { return '' }
   return value.replaceAll('\\', '/').replaceAll(/\/+/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
 }
 
@@ -66,7 +74,7 @@ export function createStorageKeyNormalizer(storageConfig: StorageConfig): (key: 
   const prefixWithSlash = basePrefix ? `${basePrefix}/` : ''
 
   return (rawKey: string): string => {
-    if (!rawKey) return ''
+    if (!rawKey) { return '' }
 
     const sanitizedKey = rawKey.replaceAll('\\', '/').replaceAll(/\/+/g, '/').replace(/^\/+/, '')
 

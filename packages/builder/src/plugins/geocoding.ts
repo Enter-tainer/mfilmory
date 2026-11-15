@@ -1,4 +1,4 @@
-import type { LocationInfo, PhotoManifestItem, PickedExif } from '@afilmory/typing'
+import type { LocationInfo, PickedExif } from '@afilmory/typing'
 
 import type { AfilmoryBuilder } from '../builder/builder.js'
 import type { Logger } from '../logger/index.js'
@@ -27,8 +27,8 @@ interface GeocodingPluginOptions {
    */
   language?: string | string[]
 }
-type GeocodingPluginOptionsResolved = Required<Pick<GeocodingPluginOptions, 'enable' | 'provider'>> &
-  Pick<GeocodingPluginOptions, 'mapboxToken' | 'nominatimBaseUrl' | 'cachePrecision'> & {
+type GeocodingPluginOptionsResolved = Required<Pick<GeocodingPluginOptions, 'enable' | 'provider'>>
+  & Pick<GeocodingPluginOptions, 'mapboxToken' | 'nominatimBaseUrl' | 'cachePrecision'> & {
     language: string | null
   }
 
@@ -40,15 +40,18 @@ interface ResolvedGeocodingSettings {
   language: string | null
 }
 
+interface PendingGeocodeJob {
+  cacheKey: string
+  promise: Promise<LocationInfo | null>
+  overwrite: boolean
+}
+
 interface GeocodingState {
   provider: GeocodingProvider | null
   providerKey: string | null
   cache: Map<string, LocationInfo | null>
-}
-
-interface LocationResolutionResult {
-  attempted: boolean
-  updated: boolean
+  inflight: Map<string, Promise<LocationInfo | null>>
+  pendingByKey: Map<string, PendingGeocodeJob>
 }
 
 type LocationLogger = Logger['main']
@@ -63,9 +66,9 @@ function normalizeCachePrecision(value: number | undefined): number {
 }
 
 function normalizeLanguage(value: string | string[] | undefined): string | null {
-  if (!value) return null
+  if (!value) { return null }
   const parts = Array.isArray(value) ? value : String(value).split(',')
-  const normalized = parts.map((v) => v.trim()).filter(Boolean)
+  const normalized = parts.map(v => v.trim()).filter(Boolean)
   return normalized.length > 0 ? normalized.join(',') : null
 }
 
@@ -90,6 +93,8 @@ function getOrCreateState(runShared: Map<string, unknown>): GeocodingState {
     provider: null,
     providerKey: null,
     cache: new Map(),
+    inflight: new Map(),
+    pendingByKey: new Map(),
   }
   runShared.set(RUN_STATE_KEY, next)
   return next
@@ -111,6 +116,7 @@ function ensureProvider(
 
   if (state.providerKey && state.providerKey !== providerKey) {
     state.cache.clear()
+    state.inflight.clear()
   }
 
   const provider = createGeocodingProvider(
@@ -136,7 +142,8 @@ async function ensurePhotoContext<T>(builder: AfilmoryBuilder, logger: Logger, f
   try {
     getPhotoExecutionContext()
     return await fn()
-  } catch {
+  }
+  catch {
     const storageConfig = builder.getStorageConfig()
     const storageManager = builder.getStorageManager()
     const normalizeStorageKey = createStorageKeyNormalizer(storageConfig)
@@ -149,6 +156,7 @@ async function ensurePhotoContext<T>(builder: AfilmoryBuilder, logger: Logger, f
         storageConfig,
         normalizeStorageKey,
         loggers,
+        pools: builder.getRuntimePools(),
       },
       fn,
     )
@@ -159,59 +167,56 @@ function buildCacheKey(latitude: number, longitude: number, precision: number): 
   return `${latitude.toFixed(precision)},${longitude.toFixed(precision)}`
 }
 
-async function resolveLocationForItem(
-  item: PhotoManifestItem,
-  exif: PickedExif | null | undefined,
-  state: GeocodingState,
-  settings: ResolvedGeocodingSettings,
-  provider: GeocodingProvider,
-  shouldOverwriteExisting: boolean,
-): Promise<LocationResolutionResult> {
-  if (item.location && !shouldOverwriteExisting) {
-    return { attempted: false, updated: false }
-  }
-
+function enqueueGeocodeLookup(params: {
+  photoKey: string
+  exif: PickedExif | null | undefined
+  state: GeocodingState
+  settings: ResolvedGeocodingSettings
+  provider: GeocodingProvider
+  overwrite: boolean
+  runInContext: <T>(fn: () => Promise<T>) => Promise<T>
+}): { hadGps: boolean, hasCached: boolean, cachedLocation: LocationInfo | null } {
+  const { photoKey, exif, state, settings, provider, overwrite, runInContext } = params
   if (!exif) {
-    if (shouldOverwriteExisting) {
-      item.location = null
-    }
-    return { attempted: false, updated: false }
+    return { hadGps: false, hasCached: false, cachedLocation: null }
   }
 
   const { latitude, longitude } = parseGPSCoordinates(exif)
   if (latitude === undefined || longitude === undefined) {
-    if (shouldOverwriteExisting) {
-      item.location = null
-    }
-    return { attempted: false, updated: false }
+    return { hadGps: false, hasCached: false, cachedLocation: null }
   }
 
   const cacheKey = buildCacheKey(latitude, longitude, settings.cachePrecision)
-  const cached = state.cache.get(cacheKey)
-  if (cached !== undefined) {
-    if (cached) {
-      item.location = cached
-      return { attempted: true, updated: true }
+  if (state.cache.has(cacheKey)) {
+    state.pendingByKey.delete(photoKey)
+    return {
+      hadGps: true,
+      hasCached: true,
+      cachedLocation: state.cache.get(cacheKey) ?? null,
     }
-    if (shouldOverwriteExisting) {
-      item.location = null
-    }
-    return { attempted: true, updated: false }
   }
 
-  const location = await extractLocationFromGPS(latitude, longitude, provider)
-  state.cache.set(cacheKey, location ?? null)
-
-  if (location) {
-    item.location = location
-    return { attempted: true, updated: true }
+  let promise = state.inflight.get(cacheKey)
+  if (!promise) {
+    promise = runInContext(async () => {
+      try {
+        const location = await extractLocationFromGPS(latitude, longitude, provider)
+        state.cache.set(cacheKey, location ?? null)
+        return location ?? null
+      }
+      catch {
+        return null
+      }
+      finally {
+        state.inflight.delete(cacheKey)
+      }
+    })
+    promise.catch(() => null)
+    state.inflight.set(cacheKey, promise)
   }
 
-  if (shouldOverwriteExisting) {
-    item.location = null
-  }
-
-  return { attempted: true, updated: false }
+  state.pendingByKey.set(photoKey, { cacheKey, promise, overwrite })
+  return { hadGps: true, hasCached: false, cachedLocation: null }
 }
 
 export default function geocodingPlugin(options: GeocodingPluginOptions = {}): BuilderPlugin {
@@ -230,37 +235,133 @@ export default function geocodingPlugin(options: GeocodingPluginOptions = {}): B
           language: normalizedOptions.language,
         }
       },
-      afterPhotoProcess: async ({ builder, payload, runShared, logger }) => {
-        if (!settings) return
-
-        const { item } = payload.result
-        if (!item) return
+      afterManifestLoad: async ({ builder, payload, runShared, logger }) => {
+        if (!settings || !normalizedOptions.enable) { return }
 
         const shouldOverwriteExisting = payload.options.isForceMode || payload.options.isForceManifest
+        if (shouldOverwriteExisting) { return }
 
-        if (!normalizedOptions.enable) return
+        const state = getOrCreateState(runShared)
+        const locationLogger = logger.main.withTag('LOCATION')
+        const provider = ensureProvider(state, settings, locationLogger)
+        if (!provider) { return }
+
+        const currentSettings = settings
+        const runInContext = <T>(fn: () => Promise<T>) => ensurePhotoContext(builder, logger, fn)
+
+        await ensurePhotoContext(builder, logger, async () => {
+          for (const item of payload.manifest.data) {
+            if (!item || item.location || !item.exif) { continue }
+            const queued = enqueueGeocodeLookup({
+              photoKey: item.s3Key,
+              exif: item.exif,
+              state,
+              settings: currentSettings,
+              provider,
+              overwrite: false,
+              runInContext,
+            })
+            if (queued.hasCached && queued.cachedLocation) {
+              item.location = queued.cachedLocation
+            }
+          }
+        })
+      },
+      onExifExtracted: async ({ builder, payload, runShared, logger }) => {
+        if (!settings || !normalizedOptions.enable) { return }
+        if (!payload.exif) { return }
+
+        const shouldOverwriteExisting = payload.options.isForceMode || payload.options.isForceManifest
+        if (payload.existingItem?.location && !shouldOverwriteExisting) {
+          return
+        }
+
+        const state = getOrCreateState(runShared)
+        const locationLogger = logger.main.withTag('LOCATION')
+        const provider = ensureProvider(state, settings, locationLogger)
+        if (!provider) { return }
+
+        const currentSettings = settings
+        const runInContext = <T>(fn: () => Promise<T>) => ensurePhotoContext(builder, logger, fn)
+        await ensurePhotoContext(builder, logger, async () => {
+          enqueueGeocodeLookup({
+            photoKey: payload.photoKey,
+            exif: payload.exif,
+            state,
+            settings: currentSettings,
+            provider,
+            overwrite: shouldOverwriteExisting,
+            runInContext,
+          })
+        })
+      },
+      afterPhotoProcess: async ({ builder, payload, runShared, logger }) => {
+        if (!settings || !normalizedOptions.enable) { return }
+
+        const { item } = payload.result
+        if (!item) { return }
+
+        const shouldOverwriteExisting = payload.options.isForceMode || payload.options.isForceManifest
 
         // 当已有位置信息且未强制刷新时，不重复调用地理编码
         if (item.location && !shouldOverwriteExisting) {
           return
         }
 
-        const currentSettings = settings
-
-        await ensurePhotoContext(builder, logger, async () => {
-          const state = getOrCreateState(runShared)
-          const locationLogger = logger.main.withTag('LOCATION')
-          const provider = ensureProvider(state, currentSettings, locationLogger)
-          if (!provider) {
-            if (shouldOverwriteExisting) {
+        const state = getOrCreateState(runShared)
+        const pending = state.pendingByKey.get(item.s3Key)
+        if (pending) {
+          if (state.cache.has(pending.cacheKey)) {
+            const cached = state.cache.get(pending.cacheKey) ?? null
+            if (cached) {
+              item.location = cached
+            }
+            else if (shouldOverwriteExisting) {
               item.location = null
             }
-            return
+            state.pendingByKey.delete(item.s3Key)
           }
+          return
+        }
 
-          const exif = item.exif ?? payload.context.existingItem?.exif ?? null
-          await resolveLocationForItem(item, exif, state, currentSettings, provider, shouldOverwriteExisting)
-        })
+        const locationLogger = logger.main.withTag('LOCATION')
+        const provider = ensureProvider(state, settings, locationLogger)
+        if (!provider) {
+          if (shouldOverwriteExisting) {
+            item.location = null
+          }
+          return
+        }
+
+        const exif = item.exif ?? payload.context.existingItem?.exif ?? null
+        const currentSettings = settings
+        const runInContext = <T>(fn: () => Promise<T>) => ensurePhotoContext(builder, logger, fn)
+        const queued = await ensurePhotoContext(builder, logger, async () =>
+          enqueueGeocodeLookup({
+            photoKey: item.s3Key,
+            exif,
+            state,
+            settings: currentSettings,
+            provider,
+            overwrite: shouldOverwriteExisting,
+            runInContext,
+          }))
+
+        if (!queued.hadGps) {
+          if (shouldOverwriteExisting) {
+            item.location = null
+          }
+          return
+        }
+
+        if (queued.hasCached) {
+          if (queued.cachedLocation) {
+            item.location = queued.cachedLocation
+          }
+          else if (shouldOverwriteExisting) {
+            item.location = null
+          }
+        }
       },
       afterProcessTasks: async ({ builder, payload, runShared, logger }) => {
         if (!settings || !normalizedOptions.enable) {
@@ -272,6 +373,8 @@ export default function geocodingPlugin(options: GeocodingPluginOptions = {}): B
         const locationLogger = logger.main.withTag('LOCATION')
         const provider = ensureProvider(state, currentSettings, locationLogger)
         if (!provider) {
+          await Promise.allSettled(Array.from(state.pendingByKey.values(), job => job.promise))
+          state.pendingByKey.clear()
           return
         }
 
@@ -287,35 +390,85 @@ export default function geocodingPlugin(options: GeocodingPluginOptions = {}): B
             storageConfig,
             normalizeStorageKey,
             loggers,
+            pools: builder.getRuntimePools(),
           },
           async () => {
             let attempted = 0
             let updated = 0
             const shouldOverwriteExisting = payload.options.isForceMode || payload.options.isForceManifest
+            const runInContext = <T>(fn: () => Promise<T>) => ensurePhotoContext(builder, logger, fn)
+            const itemTasks: Array<Promise<void>> = []
 
             for (const item of payload.manifest) {
-              if (!item) continue
-              if (item.location) continue
+              if (!item) { continue }
 
-              const { attempted: didAttempt, updated: didUpdate } = await resolveLocationForItem(
-                item,
-                item.exif,
+              const pending = state.pendingByKey.get(item.s3Key)
+              if (pending) {
+                itemTasks.push(
+                  pending.promise.then((location) => {
+                    attempted++
+                    if (location) {
+                      item.location = location
+                      updated++
+                    }
+                    else if (pending.overwrite) {
+                      item.location = null
+                    }
+                  }),
+                )
+                continue
+              }
+
+              if (item.location) { continue }
+
+              const queued = enqueueGeocodeLookup({
+                photoKey: item.s3Key,
+                exif: item.exif,
                 state,
-                currentSettings,
+                settings: currentSettings,
                 provider,
-                shouldOverwriteExisting,
-              )
+                overwrite: shouldOverwriteExisting,
+                runInContext,
+              })
 
-              if (didAttempt) {
+              if (!queued.hadGps) {
+                continue
+              }
+
+              if (queued.hasCached) {
                 attempted++
-                if (didUpdate) {
+                if (queued.cachedLocation) {
+                  item.location = queued.cachedLocation
                   updated++
                 }
+                continue
+              }
+
+              const created = state.pendingByKey.get(item.s3Key)
+              if (created) {
+                itemTasks.push(
+                  created.promise.then((location) => {
+                    attempted++
+                    if (location) {
+                      item.location = location
+                      updated++
+                    }
+                    else if (created.overwrite) {
+                      item.location = null
+                    }
+                  }),
+                )
               }
             }
 
+            await Promise.all(itemTasks)
+            if (state.pendingByKey.size > 0) {
+              await Promise.allSettled(Array.from(state.pendingByKey.values(), job => job.promise))
+              state.pendingByKey.clear()
+            }
+
             if (attempted > 0) {
-              locationLogger.info(`📍 为 ${attempted} 张缺失位置信息的照片尝试补全，成功 ${updated} 张`)
+              locationLogger.info(`📍 为 ${attempted} 张照片完成逆地理编码，成功 ${updated} 张`)
             }
           },
         )

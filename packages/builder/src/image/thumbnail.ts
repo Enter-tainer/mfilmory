@@ -43,6 +43,28 @@ export const THUMBNAIL_WIDTH = 500
  */
 export const THUMBNAIL_SIGNATURE = `${THUMBNAIL_WIDTH}q${THUMBNAIL_QUALITY}e6b${THUMBNAIL_BITDEPTH}.${THUMBNAIL_EXTENSION}`
 
+export async function encodeThumbnailBuffer(
+  imageBuffer: Buffer,
+  limitInputPixels?: number | boolean,
+): Promise<Buffer> {
+  const bitdepth = await resolveAvifBitdepth(THUMBNAIL_BITDEPTH, imageBuffer, limitInputPixels)
+  return await sharp(imageBuffer, { limitInputPixels })
+    .rotate()
+    .resize(THUMBNAIL_WIDTH, null, {
+      withoutEnlargement: true,
+    })
+    .avif({ quality: THUMBNAIL_QUALITY, effort: 6, bitdepth })
+    .toBuffer()
+}
+
+export async function saveThumbnailToDisk(photoId: string, thumbnailBuffer: Buffer): Promise<string> {
+  const { thumbnailPath, thumbnailUrl } = getThumbnailPaths(photoId)
+  await ensureThumbnailDir()
+  await fs.writeFile(thumbnailPath, thumbnailBuffer)
+  await writeSignature('thumbnail', photoId, THUMBNAIL_SIGNATURE)
+  return thumbnailUrl
+}
+
 /** 缩略图文件名。所有调用方都应走这里，不要再硬编码扩展名（上游 #259）。 */
 export function getThumbnailFilename(photoId: string): string {
   return `${photoId}.${THUMBNAIL_EXTENSION}`
@@ -90,7 +112,8 @@ export async function thumbnailExists(photoId: string): Promise<boolean> {
     const { thumbnailPath } = getThumbnailPaths(photoId)
     await fs.access(thumbnailPath)
     return true
-  } catch {
+  }
+  catch {
     return false
   }
 }
@@ -107,7 +130,8 @@ async function processExistingThumbnail(photoId: string): Promise<ThumbnailResul
     const thumbHash = await generateBlurhash(existingBuffer)
 
     return createSuccessResult(thumbnailUrl, existingBuffer, thumbHash)
-  } catch (error) {
+  }
+  catch (error) {
     thumbnailLog?.warn(`读取现有缩略图失败，重新生成：${photoId}`, error)
     return null
   }
@@ -127,18 +151,7 @@ async function generateNewThumbnail(
   const startTime = Date.now()
 
   try {
-    // 创建 Sharp 实例，复用于缩略图和 blurhash 生成
-    const sharpInstance = sharp(imageBuffer, { limitInputPixels }).rotate() // 自动根据 EXIF 旋转
-    const bitdepth = await resolveAvifBitdepth(THUMBNAIL_BITDEPTH, imageBuffer, limitInputPixels)
-
-    // 生成缩略图
-    const thumbnailBuffer = await sharpInstance
-      .clone() // 克隆实例用于缩略图生成
-      .resize(THUMBNAIL_WIDTH, null, {
-        withoutEnlargement: true,
-      })
-      .avif({ quality: THUMBNAIL_QUALITY, effort: 6, bitdepth })
-      .toBuffer()
+    const thumbnailBuffer = await encodeThumbnailBuffer(imageBuffer, limitInputPixels)
 
     // 保存到文件
     if (persistToDisk) {
@@ -151,10 +164,11 @@ async function generateNewThumbnail(
     log.success(`生成完成：${photoId} (${sizeKB}KB, ${duration}ms)`)
 
     // 基于生成的缩略图生成 blurhash
-    const thumbHash = await generateBlurhash(thumbnailBuffer)
+    const thumbHash = await generateBlurhash(thumbnailBuffer, limitInputPixels)
 
     return createSuccessResult(thumbnailUrl, thumbnailBuffer, thumbHash)
-  } catch (error) {
+  }
+  catch (error) {
     log.error(`生成失败：${photoId}`, error)
     return createFailureResult()
   }
@@ -176,9 +190,8 @@ export async function generateThumbnailAndBlurhash(
     }
 
     // 参数签名没变且文件存在 → 直接复用；--force-thumbnails 也不会重复编码
-    const signature = THUMBNAIL_SIGNATURE
     const forceHard = forceRegenerate && hardForceEncode()
-    if (!forceHard && (await thumbnailExists(photoId)) && (await signatureMatches('thumbnail', photoId, signature))) {
+    if (!forceHard && (await thumbnailExists(photoId)) && (await signatureMatches('thumbnail', photoId, THUMBNAIL_SIGNATURE))) {
       const existingResult = await processExistingThumbnail(photoId)
 
       if (existingResult) {
@@ -192,10 +205,11 @@ export async function generateThumbnailAndBlurhash(
     // 只在真的写了文件之后记签名：--dry-run 下 persistToDisk=false，
     // 若此时也记签名，下次构建会以为磁盘上已经是新参数产物而永久跳过（回不去）。
     if (result.thumbnailBuffer && persistToDisk) {
-      await writeSignature('thumbnail', photoId, signature)
+      await writeSignature('thumbnail', photoId, THUMBNAIL_SIGNATURE)
     }
     return result
-  } catch (error) {
+  }
+  catch (error) {
     thumbnailLog.error(`处理失败：${photoId}`, error)
     return createFailureResult()
   }

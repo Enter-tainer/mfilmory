@@ -129,8 +129,9 @@ type BaseS3LikeConfig = {
   totalTimeoutMs?: number
   retryMode?: 'standard' | 'adaptive' | 'legacy'
   maxAttempts?: number
-  // Download concurrency limiter within a single process/worker
+  // Download / upload concurrency limiters within a single process
   downloadConcurrency?: number
+  uploadConcurrency?: number
   /**
    * Optional override for the SigV4 service name. Defaults to:
    * - `s3` for AWS or generic S3-compatible endpoints
@@ -198,28 +199,28 @@ export type LocalConfig = {
   excludeRegex?: string // 排除文件的正则表达式
 }
 
-export type EagleRule =
+export type EagleRule
+  = | {
+    type: 'tag'
+    name: string
+  }
   | {
-      type: 'tag'
-      name: string
-    }
+    type: 'folder'
+    /**
+     * Only a folder name, not the full path.
+     */
+    name: string
+    /**
+     * Defaults to `false`.
+     */
+    includeSubfolder?: boolean
+  }
   | {
-      type: 'folder'
-      /**
-       * Only a folder name, not the full path.
-       */
-      name: string
-      /**
-       * Defaults to `false`.
-       */
-      includeSubfolder?: boolean
-    }
-  | {
-      /**
-       * Smart folders are not yet supported.
-       */
-      type: 'smartFolder'
-    }
+    /**
+     * Smart folders are not yet supported.
+     */
+    type: 'smartFolder'
+  }
 
 export type EagleConfig = {
   provider: 'eagle'

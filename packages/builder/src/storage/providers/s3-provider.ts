@@ -42,7 +42,7 @@ function formatS3ErrorBody(body?: string | null): string {
   }
 
   const pickCodeAndMessage = (payload: Record<string, unknown>): string | null => {
-    if (!payload || typeof payload !== 'object') return null
+    if (!payload || typeof payload !== 'object') { return null }
 
     const code = pickStringField(payload, ['Code', 'code', 'ErrorCode'])
     const message = pickStringField(payload, ['Message', 'message', 'ErrorMessage'])
@@ -51,12 +51,12 @@ function formatS3ErrorBody(body?: string | null): string {
 
     if (code || message) {
       const parts: string[] = []
-      if (code) parts.push(`[${code}]`)
-      if (message) parts.push(message)
+      if (code) { parts.push(`[${code}]`) }
+      if (message) { parts.push(message) }
 
       const extraDetails: string[] = []
-      if (requestId) extraDetails.push(`RequestId=${requestId}`)
-      if (hostId) extraDetails.push(`HostId=${hostId}`)
+      if (requestId) { extraDetails.push(`RequestId=${requestId}`) }
+      if (hostId) { extraDetails.push(`HostId=${hostId}`) }
       if (extraDetails.length > 0) {
         parts.push(`(${extraDetails.join(', ')})`)
       }
@@ -72,13 +72,14 @@ function formatS3ErrorBody(body?: string | null): string {
       const parsed = JSON.parse(trimmed)
       if (parsed && typeof parsed === 'object') {
         const direct = pickCodeAndMessage(parsed as Record<string, unknown>)
-        if (direct) return direct
+        if (direct) { return direct }
         if ('error' in parsed && typeof parsed.error === 'object' && parsed.error) {
           const nested = pickCodeAndMessage(parsed.error as Record<string, unknown>)
-          if (nested) return nested
+          if (nested) { return nested }
         }
       }
-    } catch {
+    }
+    catch {
       // ignore JSON parse errors
     }
     return null
@@ -88,15 +89,16 @@ function formatS3ErrorBody(body?: string | null): string {
     try {
       const parsed = xmlParser.parse(trimmed)
       if (parsed && typeof parsed === 'object') {
-        const errorNode =
-          (parsed.Error as Record<string, unknown> | undefined) ??
-          (parsed.ErrorResponse as Record<string, unknown> | undefined) ??
-          (parsed as Record<string, unknown>)
+        const errorNode
+          = (parsed.Error as Record<string, unknown> | undefined)
+            ?? (parsed.ErrorResponse as Record<string, unknown> | undefined)
+            ?? (parsed as Record<string, unknown>)
 
         const formatted = pickCodeAndMessage(errorNode)
-        if (formatted) return formatted
+        if (formatted) { return formatted }
       }
-    } catch {
+    }
+    catch {
       // ignore XML parse errors
     }
     return null
@@ -118,18 +120,22 @@ export class S3StorageProvider implements StorageProvider {
   private config: S3CompatibleConfig
   private client: S3ProviderClient
   private limiter: Semaphore
+  private uploadLimiter: Semaphore
 
   constructor(config: S3CompatibleConfig) {
     this.config = config
     this.client = new S3ProviderClient(config)
-    this.limiter = new Semaphore(this.config.downloadConcurrency ?? 16)
+    const downloadConcurrency = Math.max(1, this.config.downloadConcurrency ?? 16)
+    const uploadConcurrency = Math.max(1, this.config.uploadConcurrency ?? downloadConcurrency)
+    this.limiter = new Semaphore(downloadConcurrency)
+    this.uploadLimiter = new Semaphore(uploadConcurrency)
   }
 
   private async readStreamWithIdleTimeout(
     response: Response,
     controller: AbortController,
     idleTimeoutMs: number,
-  ): Promise<{ buffer: Buffer; firstByteAt: number | null }> {
+  ): Promise<{ buffer: Buffer, firstByteAt: number | null }> {
     if (!response.body) {
       return { buffer: Buffer.alloc(0), firstByteAt: null }
     }
@@ -140,7 +146,7 @@ export class S3StorageProvider implements StorageProvider {
     let firstByteAt: number | null = null
 
     const resetIdle = () => {
-      if (idleTimer) clearTimeout(idleTimer)
+      if (idleTimer) { clearTimeout(idleTimer) }
       idleTimer = setTimeout(() => {
         controller.abort()
       }, idleTimeoutMs)
@@ -205,7 +211,8 @@ export class S3StorageProvider implements StorageProvider {
           const sizeKB = Math.round(buffer.length / 1024)
           logger.s3.success(`下载完成：${key} (${sizeKB}KB, ${duration}ms, TTFB ${ttfb}ms, attempt ${attempt})`)
           return buffer
-        } catch (error) {
+        }
+        catch (error) {
           const elapsed = Date.now() - startTime
           logger.s3.warn(`下载失败：${key} (attempt ${attempt}/${maxAttempts}, ${elapsed}ms)`, error)
           clearTimeout(totalTimer)
@@ -257,7 +264,7 @@ export class S3StorageProvider implements StorageProvider {
     const fileGroups = new Map<string, StorageObject[]>()
 
     for (const obj of allObjects) {
-      if (!obj.key) continue
+      if (!obj.key) { continue }
 
       const dir = path.dirname(obj.key)
       const basename = path.parse(obj.key).name
@@ -275,7 +282,7 @@ export class S3StorageProvider implements StorageProvider {
       let videoFile: StorageObject | null = null
 
       for (const file of files) {
-        if (!file.key) continue
+        if (!file.key) { continue }
 
         const ext = path.extname(file.key).toLowerCase()
 
@@ -340,7 +347,7 @@ export class S3StorageProvider implements StorageProvider {
   private async listPagedObjects(
     prefix?: string,
     continuationToken?: string | null,
-  ): Promise<{ objects: StorageObject[]; nextContinuationToken: string | null; isTruncated: boolean }> {
+  ): Promise<{ objects: StorageObject[], nextContinuationToken: string | null, isTruncated: boolean }> {
     // 每页固定 1000，一直翻到 `isTruncated` / `nextContinuationToken` 耗尽
     const maxKeysPerRequest = 1000
     const response = await this.client.listObjects({
@@ -356,13 +363,13 @@ export class S3StorageProvider implements StorageProvider {
     const result = parsed?.ListBucketResult ?? {}
     const contents = result?.Contents ?? []
     const items = Array.isArray(contents) ? contents : contents ? [contents] : []
-    const nextContinuationToken =
-      typeof result?.NextContinuationToken === 'string' && result.NextContinuationToken.trim().length > 0
+    const nextContinuationToken
+      = typeof result?.NextContinuationToken === 'string' && result.NextContinuationToken.trim().length > 0
         ? result.NextContinuationToken
         : null
     const isTruncatedRaw = result?.IsTruncated
-    const isTruncated =
-      typeof isTruncatedRaw === 'string' ? isTruncatedRaw.toLowerCase() === 'true' : Boolean(isTruncatedRaw)
+    const isTruncated
+      = typeof isTruncatedRaw === 'string' ? isTruncatedRaw.toLowerCase() === 'true' : Boolean(isTruncatedRaw)
 
     return {
       objects: items
@@ -375,7 +382,7 @@ export class S3StorageProvider implements StorageProvider {
             etag: sanitizeS3Etag(typeof item?.ETag === 'string' ? item.ETag : undefined),
           } satisfies StorageObject
         })
-        .filter((item) => Boolean(item.key)),
+        .filter(item => Boolean(item.key)),
       nextContinuationToken,
       isTruncated,
     }
@@ -399,10 +406,10 @@ export class S3StorageProvider implements StorageProvider {
     const objects = await this.listObjects(listPrefix)
 
     const keysToDelete = objects
-      .map((obj) => obj.key)
+      .map(obj => obj.key)
       .filter((key): key is string => {
-        if (!key) return false
-        if (!targetPrefix) return true
+        if (!key) { return false }
+        if (!targetPrefix) { return true }
         return key.startsWith(targetPrefix)
       })
 
@@ -412,29 +419,58 @@ export class S3StorageProvider implements StorageProvider {
   }
 
   async uploadFile(key: string, data: Buffer, options?: StorageUploadOptions): Promise<StorageObject> {
-    const headers: Record<string, string> = {
-      'content-type': options?.contentType ?? 'application/octet-stream',
-      'content-length': data.byteLength.toString(),
-    }
-    if (options?.cacheControl) {
-      headers['cache-control'] = options.cacheControl
-    }
+    return await this.uploadLimiter.run(async () => {
+      const headers: Record<string, string> = {
+        'content-type': options?.contentType ?? 'application/octet-stream',
+        'content-length': data.byteLength.toString(),
+      }
+      if (options?.cacheControl) {
+        headers['cache-control'] = options.cacheControl
+      }
 
-    const response = await this.client.putObject(key, data as unknown as BodyInit, headers)
+      const maxAttempts = this.config.maxAttempts ?? 3
+      const totalTimeoutMs = this.config.totalTimeoutMs ?? 60_000
 
-    if (!response.ok) {
-      const text = await response.text().catch(() => '')
-      throw new Error(`上传 S3 对象失败：${key} (status ${response.status}) ${formatS3ErrorBody(text)}`)
-    }
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const controller = new AbortController()
+        const totalTimer = setTimeout(() => controller.abort(), totalTimeoutMs)
 
-    const lastModified = new Date()
+        try {
+          const response = await this.client.putObject(key, data as unknown as BodyInit, headers, {
+            signal: controller.signal,
+          })
+          clearTimeout(totalTimer)
 
-    return {
-      key,
-      size: data.byteLength,
-      lastModified,
-      etag: sanitizeS3Etag(response.headers.get('etag')),
-    }
+          if (!response.ok) {
+            const text = await response.text().catch(() => '')
+            const error = new Error(`上传 S3 对象失败：${key} (status ${response.status}) ${formatS3ErrorBody(text)}`)
+            if (response.status >= 500 || response.status === 429) {
+              throw error
+            }
+            throw error
+          }
+
+          return {
+            key,
+            size: data.byteLength,
+            lastModified: new Date(),
+            etag: sanitizeS3Etag(response.headers.get('etag')),
+          }
+        }
+        catch (error) {
+          clearTimeout(totalTimer)
+          if (attempt < maxAttempts) {
+            const delay = backoffDelay(attempt)
+            logger.s3.warn(`上传重试：${key} (attempt ${attempt}/${maxAttempts}, ${delay}ms)`, error)
+            await sleep(delay)
+            continue
+          }
+          throw error
+        }
+      }
+
+      throw new Error(`上传 S3 对象失败：${key}`)
+    })
   }
 
   async moveFile(sourceKey: string, targetKey: string, options?: StorageUploadOptions): Promise<StorageObject> {

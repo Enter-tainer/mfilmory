@@ -1,8 +1,8 @@
 import 'dotenv-expand/config'
 
 import { execSync } from 'node:child_process'
-import cluster from 'node:cluster'
 import { existsSync } from 'node:fs'
+import os from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -10,18 +10,12 @@ import { fileURLToPath } from 'node:url'
 import type { BuildProgressListener } from './builder/builder.js'
 import { AfilmoryBuilder } from './builder/index.js'
 import { loadBuilderConfig } from './config/index.js'
+import { shutdownExiftool } from './image/exif.js'
 import { logger, setLogListener } from './logger/index.js'
-import { runAsWorker } from './runAsWorker.js'
 
 type BuilderTUI = import('./cli/tui.js').BuilderTUI
 
 async function main() {
-  // 检查是否作为 cluster worker 运行
-  if (process.env.CLUSTER_WORKER === 'true' || process.argv.includes('--cluster-worker') || cluster.isWorker) {
-    await runAsWorker()
-    return
-  }
-
   const builderConfig = await loadBuilderConfig({
     cwd: join(fileURLToPath(import.meta.url), '../../../..'),
   })
@@ -66,9 +60,8 @@ async function main() {
   tsx src/core/cli.ts --config                  # 显示配置信息
 
 配置：
-  在 builder.config.ts 中设置 performance.worker.useClusterMode = true 
-  可启用多进程集群模式，发挥多核心优势。
-
+  在 builder.config.ts 的 system.processing 中可配置：
+    cpuConcurrency / sharpConcurrency / cpuWorkerCount / networkConcurrency
 `)
     return
   }
@@ -105,12 +98,13 @@ async function main() {
         break
       }
     }
-    logger.main.info(`   默认并发数：${config.system.processing.defaultConcurrency}`)
-    logger.main.info(`   Live Photo 检测：${config.system.processing.enableLivePhotoDetection ? '启用' : '禁用'}`)
-    logger.main.info(`   照片后缀摘要长度：${config.system.processing.digestSuffixLength}`)
-    logger.main.info(`   Worker 数：${config.system.observability.performance.worker.workerCount}`)
-    logger.main.info(`   Worker 超时：${config.system.observability.performance.worker.timeout}ms`)
-    logger.main.info(`   集群模式：${config.system.observability.performance.worker.useClusterMode ? '启用' : '禁用'}`)
+    const { processing } = config.system
+    logger.main.info(`   CPU 并发槽：${processing.cpuConcurrency}`)
+    logger.main.info(`   Sharp 内部线程：${processing.sharpConcurrency}`)
+    logger.main.info(`   CPU 子进程数：${processing.cpuWorkerCount}`)
+    logger.main.info(`   网络并发上限：${processing.networkConcurrency}`)
+    logger.main.info(`   Live Photo 检测：${processing.enableLivePhotoDetection ? '启用' : '禁用'}`)
+    logger.main.info(`   照片后缀摘要长度：${processing.digestSuffixLength}`)
     logger.main.info('')
     if (!userConfig) {
       logger.main.warn('未配置用户级存储设置')
@@ -135,10 +129,12 @@ async function main() {
   }
 
   const config = cliBuilder.getConfig()
-  const concurrencyLimit = config.system.observability.performance.worker.workerCount
-  const finalConcurrency = concurrencyLimit ?? config.system.processing.defaultConcurrency
-  const processingMode = config.system.observability.performance.worker.useClusterMode ? '多进程集群' : '并发线程池'
-  const processingModeKey = config.system.observability.performance.worker.useClusterMode ? 'cluster' : 'worker'
+  const { processing } = config.system
+  const estimatedCpuConcurrency
+    = typeof processing.cpuConcurrency === 'number' && processing.cpuConcurrency > 0
+      ? processing.cpuConcurrency
+      : os.cpus().length
+  const initialModeKey = processing.cpuWorkerCount === 0 ? 'in-process' : 'cpu-worker'
 
   const useTui = process.stdout.isTTY && !disableUi
   let tui: BuilderTUI | null = null
@@ -150,17 +146,18 @@ async function main() {
     tui.attach()
     tui.setRunMetadata({
       runMode,
-      concurrency: finalConcurrency,
-      processingMode: processingModeKey,
+      concurrency: estimatedCpuConcurrency,
+      processingMode: initialModeKey,
     })
     progressListener = tui.createProgressListener()
     setLogListener(message => tui?.handleLog(message), { forwardToConsole: false })
   }
 
   logger.main.info(`🚀 运行模式：${runMode}`)
-  logger.main.info(`⚡ 最大并发数：${finalConcurrency}`)
-  logger.main.info(`🔧 处理模式：${processingMode}`)
-  logger.main.info(`🏗️ 使用构建器：AfilmoryBuilder (适配器模式)`)
+  logger.main.info(
+    `⚡ 资源池配置：CPU=${processing.cpuConcurrency} (sharp=${processing.sharpConcurrency}, workers=${processing.cpuWorkerCount}), 网络=${processing.networkConcurrency}`,
+  )
+  logger.main.info(`🏗️ 使用构建器：AfilmoryBuilder (资源池分离模式)`)
   if (dryRun) {
     logger.main.info('🧪 Dry-run 已启用')
   }
@@ -178,7 +175,6 @@ async function main() {
       isForceThumbnails,
       dryRun,
       keyRegex,
-      concurrencyLimit,
       progressListener,
     })
 
@@ -193,6 +189,7 @@ async function main() {
       setLogListener(null, { forwardToConsole: true })
       tui?.detach()
     }
+    await shutdownExiftool()
   }
 
   process.exit(0)

@@ -27,11 +27,12 @@ export class S3ProviderClient {
     })
   }
 
-  async putObject(key: string, body: BodyInit, headers?: HeadersInit): Promise<Response> {
+  async putObject(key: string, body: BodyInit, headers?: HeadersInit, init?: RequestInit): Promise<Response> {
     return await this.client.fetch(this.buildObjectUrl(key), {
       method: 'PUT',
       body,
       headers,
+      ...init,
     })
   }
 
@@ -75,7 +76,7 @@ export class S3ProviderClient {
     sourceKey: string,
     targetKey: string,
     options?: { headers?: HeadersInit },
-  ): Promise<{ metadata: { key: string; size?: number; etag?: string | null; lastModified?: Date } }> {
+  ): Promise<{ metadata: { key: string, size?: number, etag?: string | null, lastModified?: Date } }> {
     const copyResponse = await this.copyObject(sourceKey, targetKey, options?.headers)
     if (!copyResponse.ok) {
       const text = await copyResponse.text().catch(() => '')
@@ -84,7 +85,7 @@ export class S3ProviderClient {
       )
     }
 
-    let metadata: { key: string; size?: number; etag?: string | null; lastModified?: Date } = { key: targetKey }
+    let metadata: { key: string, size?: number, etag?: string | null, lastModified?: Date } = { key: targetKey }
     const headResponse = await this.headObject(targetKey)
     if (headResponse.ok) {
       const size = headResponse.headers.get('content-length')
