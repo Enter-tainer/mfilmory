@@ -5,7 +5,6 @@ import { XMLParser } from 'fast-xml-parser'
 import { backoffDelay, sleep } from '../../../../utils/src/backoff.js'
 import { Semaphore } from '../../../../utils/src/semaphore.js'
 import { SUPPORTED_FORMATS } from '../../constants/index.js'
-import { isDerivedAssetKey } from '../derived-assets.js'
 import { logger } from '../../logger/index.js'
 import type {
   ProgressCallback,
@@ -229,21 +228,18 @@ export class S3StorageProvider implements StorageProvider {
   async listImages(): Promise<StorageObject[]> {
     const excludeRegex = this.config.excludeRegex ? new RegExp(this.config.excludeRegex) : null
 
-    // 过滤发生在**翻页过程中**，而不是先截断再过滤：
-    // `.afilmory/` 的 key 以 `.` 开头，S3 字典序里排在最前，所以「先取一页再过滤」
-    // 会得到一整页产物、过滤后剩 0 张照片。maxFileLimit 必须限制**照片数**，
-    // 而不是被产物挤占的原始对象数。
-    return await this.collectObjects({
+    // 这里**不**应用 maxFileLimit：插件（thumbnail-storage / og-image-storage）
+    // 注册的排除前缀是在 StorageManager.applyExcludes 里生效的，而 S3 的字典序
+    // 把 `.afilmory/` 排在最前面。若在 provider 层先截断到 maxFileLimit 再排除，
+    // 默认模板的 1000 会取到一整页产物、排除后剩 0 张照片。
+    // 上限由 StorageManager.listImages() 在排除之后按「照片数」施加。
+    return await this.listAllMatching({
       accept: (key) => {
         if (excludeRegex && excludeRegex.test(key)) {
           return false
         }
-        if (isDerivedAssetKey(key)) {
-          return false
-        }
         return SUPPORTED_FORMATS.has(path.extname(key).toLowerCase())
       },
-      label: '照片',
     })
   }
 
@@ -319,19 +315,17 @@ export class S3StorageProvider implements StorageProvider {
   }
 
   /**
-   * 翻页收集对象，`accept` 在**每一页里**执行，只有被接受的对象计入上限。
+   * 翻页遍历全部对象，只保留 `accept` 接受的那些（**不受 maxFileLimit 限制**）。
    *
-   * 之前的实现是「先 listObjects 截断到 maxFileLimit，再过滤」，配上
-   * `shouldPaginate = maxTotal > 1000` 的两个坑：
-   *  1. 桶里对象 > 1000 且 maxFileLimit = 1000 时**根本不翻页**，第二页之后全部静默丢失；
-   *  2. 过滤在截断之后，`.afilmory/` 又排在最前，于是「一页产物 → 过滤后 0 张照片」。
-   * 这两条叠加会让全新环境产出「0 张照片」或「少 1/3 照片」的 manifest，且不报错。
+   * 供 `listImages()` 使用：上限必须由 `StorageManager.listImages()` 在
+   * `applyExcludes`（插件注册的产物前缀）**之后**按「照片数」施加。否则 S3 字典序
+   * 里排在最前的 `.afilmory/` 产物会把整页配额吃光——默认模板 `maxFileLimit: 1000`
+   * 时实测会取到 1000 个产物、排除后剩 **0 张照片**。
    */
-  private async collectObjects(
-    options: { accept?: (key: string) => boolean, label?: string } = {},
+  private async listAllMatching(
+    options: { accept?: (key: string) => boolean } = {},
   ): Promise<StorageObject[]> {
-    const { accept, label = '对象' } = options
-    const maxTotal = this.getMaxTotal()
+    const { accept } = options
     const collected: StorageObject[] = []
     let continuationToken: string | null = null
 
@@ -346,22 +340,9 @@ export class S3StorageProvider implements StorageProvider {
           continue
         }
         collected.push(obj)
-        if (maxTotal && collected.length >= maxTotal) {
-          break
-        }
       }
 
       const hasMore = isTruncated || Boolean(nextContinuationToken)
-      if (maxTotal && collected.length >= maxTotal) {
-        if (hasMore) {
-          logger.main.warn(
-            `已收集 ${maxTotal} 个${label}并触发 maxFileLimit 上限，桶里还有更多对象没有被列出。`
-            + ' 请调大 maxFileLimit，或设为 0 表示不限制。',
-          )
-        }
-        break
-      }
-
       if (!hasMore || !nextContinuationToken) {
         break
       }
@@ -543,4 +524,6 @@ export class S3StorageProvider implements StorageProvider {
     return prefix.replaceAll('\\', '/').replaceAll(/^\/+|\/+$/g, '')
   }
 }
+
+
 

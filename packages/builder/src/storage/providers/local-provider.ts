@@ -7,7 +7,6 @@ import { CompatibleLoggerAdapter } from '@afilmory/builder/photo/logger-adapter.
 import consola from 'consola'
 
 import { SUPPORTED_FORMATS } from '../../constants/index.js'
-import { isDerivedAssetKey } from '../derived-assets.js'
 import { logger } from '../../logger/index.js'
 import type { LocalConfig, StorageObject, StorageProvider, StorageUploadOptions } from '../interfaces'
 
@@ -105,11 +104,8 @@ export class LocalStorageProvider implements StorageProvider {
   async listImages(): Promise<StorageObject[]> {
     const allFiles = await this.listAllFiles()
 
-    // 过滤出图片文件；同时排除 builder 自己的产物（.afilmory/）
+    // 过滤出图片文件
     return allFiles.filter((file) => {
-      if (isDerivedAssetKey(file.key)) {
-        return false
-      }
       const ext = path.extname(file.key).toLowerCase()
       return SUPPORTED_FORMATS.has(ext)
     })
@@ -433,5 +429,6 @@ async function copyToDist(fromPath: string, distPath: string): Promise<void> {
     logger.main.error(`LocalStorageProvider: basePath: ${fromPath}, distPath: ${distPath}, 错误: ${error}`)
   }
 }
+
 
 
