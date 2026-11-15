@@ -1,4 +1,3 @@
-import { isDerivedAssetKey } from './derived-assets.js'
 import { StorageFactory } from './factory.js'
 import type {
   StorageConfig,
@@ -75,9 +74,7 @@ export class StorageManager {
    */
   async listImages(): Promise<StorageObject[]> {
     const objects = await this.provider.listImages()
-    // 排除 builder 自己的产物：`.afilmory/thumbnails|previews|og-images` 里的
-    // `.avif`/`.webp` 也是合法输入格式，不排除就会被当成照片再处理一遍。
-    return this.applyExcludes(objects).filter(obj => !isDerivedAssetKey(obj.key))
+    return this.applyExcludes(objects)
   }
 
   /**
@@ -229,5 +226,6 @@ export class StorageManager {
     this.currentConfig = config
   }
 }
+
 
 

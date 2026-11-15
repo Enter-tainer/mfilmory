@@ -5,6 +5,7 @@ import { XMLParser } from 'fast-xml-parser'
 import { backoffDelay, sleep } from '../../../../utils/src/backoff.js'
 import { Semaphore } from '../../../../utils/src/semaphore.js'
 import { SUPPORTED_FORMATS } from '../../constants/index.js'
+import { isDerivedAssetKey } from '../derived-assets.js'
 import { logger } from '../../logger/index.js'
 import type {
   ProgressCallback,
@@ -226,22 +227,28 @@ export class S3StorageProvider implements StorageProvider {
   }
 
   async listImages(): Promise<StorageObject[]> {
-    const objects = await this.listObjects()
     const excludeRegex = this.config.excludeRegex ? new RegExp(this.config.excludeRegex) : null
 
-    // 过滤出图片文件并转换为通用格式
-    const imageObjects = objects.filter((obj) => {
-      if (!obj.key) return false
-      if (excludeRegex && excludeRegex.test(obj.key)) return false
-
-      const ext = path.extname(obj.key).toLowerCase()
-      return SUPPORTED_FORMATS.has(ext)
+    // 过滤发生在**翻页过程中**，而不是先截断再过滤：
+    // `.afilmory/` 的 key 以 `.` 开头，S3 字典序里排在最前，所以「先取一页再过滤」
+    // 会得到一整页产物、过滤后剩 0 张照片。maxFileLimit 必须限制**照片数**，
+    // 而不是被产物挤占的原始对象数。
+    return await this.collectObjects({
+      accept: (key) => {
+        if (excludeRegex && excludeRegex.test(key)) {
+          return false
+        }
+        if (isDerivedAssetKey(key)) {
+          return false
+        }
+        return SUPPORTED_FORMATS.has(path.extname(key).toLowerCase())
+      },
+      label: '照片',
     })
-
-    return imageObjects
   }
 
   async listAllFiles(_progressCallback?: ProgressCallback): Promise<StorageObject[]> {
+    // 清理 / 上传去重 / Live Photo 配对需要看到产物，所以这里只排除掉被删除标记之外的一切
     return await this.listObjects()
   }
 
@@ -302,33 +309,90 @@ export class S3StorageProvider implements StorageProvider {
     return livePhotoMap
   }
 
-  private async listObjects(prefix?: string): Promise<StorageObject[]> {
-    // 0 / 负数 / 未配置 都表示「不限制」：之前 `maxFileLimit: 0` 会算成「只取一页」，
-    // 而 1000（默认模板的值）会让 shouldPaginate 为 false，直接丢掉第二页之后的
-    // 所有对象且**不报错**——桶里 1489 个对象时等于静默少掉 489 个。
-    const configuredLimit = this.config.maxFileLimit
-    const maxTotal = configuredLimit !== undefined && configuredLimit !== null && configuredLimit > 0
-      ? configuredLimit
-      : undefined
-    const shouldPaginate = maxTotal === undefined || maxTotal > 1000
-    const all: StorageObject[] = []
+  /** `maxFileLimit`：0 / 负数 / 未配置都表示不限制。 */
+  private getMaxTotal(): number | undefined {
+    const limit = this.config.maxFileLimit
+    if (limit === undefined || limit === null || limit <= 0) {
+      return undefined
+    }
+    return limit
+  }
+
+  /**
+   * 翻页收集对象，`accept` 在**每一页里**执行，只有被接受的对象计入上限。
+   *
+   * 之前的实现是「先 listObjects 截断到 maxFileLimit，再过滤」，配上
+   * `shouldPaginate = maxTotal > 1000` 的两个坑：
+   *  1. 桶里对象 > 1000 且 maxFileLimit = 1000 时**根本不翻页**，第二页之后全部静默丢失；
+   *  2. 过滤在截断之后，`.afilmory/` 又排在最前，于是「一页产物 → 过滤后 0 张照片」。
+   * 这两条叠加会让全新环境产出「0 张照片」或「少 1/3 照片」的 manifest，且不报错。
+   */
+  private async collectObjects(
+    options: { accept?: (key: string) => boolean, label?: string } = {},
+  ): Promise<StorageObject[]> {
+    const { accept, label = '对象' } = options
+    const maxTotal = this.getMaxTotal()
+    const collected: StorageObject[] = []
     let continuationToken: string | null = null
 
-    while (true) {
-      const { objects, nextContinuationToken, isTruncated } = await this.listPagedObjects(prefix, continuationToken)
-      all.push(...objects)
+    for (;;) {
+      const { objects, nextContinuationToken, isTruncated } = await this.listPagedObjects(undefined, continuationToken)
 
-      if (maxTotal && all.length >= maxTotal) {
-        if (isTruncated || nextContinuationToken) {
+      for (const obj of objects) {
+        if (!obj.key) {
+          continue
+        }
+        if (accept && !accept(obj.key)) {
+          continue
+        }
+        collected.push(obj)
+        if (maxTotal && collected.length >= maxTotal) {
+          break
+        }
+      }
+
+      const hasMore = isTruncated || Boolean(nextContinuationToken)
+      if (maxTotal && collected.length >= maxTotal) {
+        if (hasMore) {
           logger.main.warn(
-            `对象列表已达到 maxFileLimit=${maxTotal} 并被截断：桶里还有更多对象没有被列出。`
-            + ' 照片会被漏处理（manifest 随之变少），请调大 maxFileLimit，或设为 0 表示不限制。',
+            `已收集 ${maxTotal} 个${label}并触发 maxFileLimit 上限，桶里还有更多对象没有被列出。`
+            + ' 请调大 maxFileLimit，或设为 0 表示不限制。',
           )
         }
         break
       }
 
-      if (!shouldPaginate || !isTruncated || !nextContinuationToken) {
+      if (!hasMore || !nextContinuationToken) {
+        break
+      }
+
+      continuationToken = nextContinuationToken
+    }
+
+    return collected
+  }
+
+  private async listObjects(prefix?: string): Promise<StorageObject[]> {
+    const maxTotal = this.getMaxTotal()
+    const all: StorageObject[] = []
+    let continuationToken: string | null = null
+
+    for (;;) {
+      const { objects, nextContinuationToken, isTruncated } = await this.listPagedObjects(prefix, continuationToken)
+      all.push(...objects)
+
+      const hasMore = isTruncated || Boolean(nextContinuationToken)
+      if (maxTotal && all.length >= maxTotal) {
+        if (hasMore) {
+          logger.main.warn(
+            `对象列表已达到 maxFileLimit=${maxTotal} 并被截断：桶里还有更多对象没有被列出。`
+            + ' 请调大 maxFileLimit，或设为 0 表示不限制。',
+          )
+        }
+        break
+      }
+
+      if (!hasMore || !nextContinuationToken) {
         break
       }
 
@@ -342,8 +406,8 @@ export class S3StorageProvider implements StorageProvider {
     prefix?: string,
     continuationToken?: string | null,
   ): Promise<{ objects: StorageObject[]; nextContinuationToken: string | null; isTruncated: boolean }> {
-    const limit = this.config.maxFileLimit
-    const maxKeysPerRequest = limit !== undefined && limit !== null && limit > 0 ? Math.min(limit, 1000) : 1000
+    // 每页固定 1000，上限由调用方按「过滤后的数量」控制
+    const maxKeysPerRequest = 1000
     const response = await this.client.listObjects({
       prefix: prefix ?? this.config.prefix,
       maxKeys: maxKeysPerRequest,
@@ -479,3 +543,4 @@ export class S3StorageProvider implements StorageProvider {
     return prefix.replaceAll('\\', '/').replaceAll(/^\/+|\/+$/g, '')
   }
 }
+
