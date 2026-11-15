@@ -162,6 +162,13 @@ export class AfilmoryBuilder {
       const listedImageObjects = await storageManager.listImages()
       const imageObjects = this.filterImageObjectsByKey(listedImageObjects, options)
       logger.main.info(`存储中找到 ${listedImageObjects.length} 张照片`)
+      if (options.dryRun) {
+        // dry-run 不加载插件，而 thumbnail-storage / og-image-storage 正是在插件初始化时
+        // 用 addExcludePrefix 把 `.afilmory/thumbnails|previews|og-images` 排除掉的。
+        // 少了这一步，这里的照片数会把 builder 自己的产物也算进去（369 张会变成 1476 张），
+        // 跟真实构建差得很远——别拿这个数字判断「要处理多少张」。
+        logger.main.warn('dry-run 不加载插件：插件注册的产物排除前缀未生效，上面的照片数可能包含缩略图/占位图/OG 卡')
+      }
       if (imageObjects.length !== listedImageObjects.length) {
         logger.main.info(`调试筛选后剩余 ${imageObjects.length} 张照片`)
       }
