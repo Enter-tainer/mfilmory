@@ -112,6 +112,14 @@ pnpm build            # 把 manifest 外置成 photos-manifest.<hash>.json，产
 
 两者都在 `.gitignore` 里（体积大 / 因站点而异），所以**全新克隆后第一次 `pnpm build` 会把存储里的照片全部处理一遍**（并重新上传缩略图 / OG 图到存储）。日常增量构建只需要保留这两个缓存即可。
 
+### 网络重试、并发池与失败恢复
+
+- `builder.config.ts` 的 `system.processing`：`cpuConcurrency`（CPU 并发槽，默认 `'auto'`）、`sharpConcurrency`（单任务 libvips 线程，默认 `'auto'`）、`cpuWorkerCount`（纯 CPU 子进程数，`'auto'` 隔离 `libuv` 饥饿，`0` 为同进程）、`networkConcurrency`（网络池默认并发上限 `16`；配置了 `storage.downloadConcurrency` / `storage.uploadConcurrency` 时以 storage 为准，构建期统一由 `NetworkPool` 单层限流）。
+- `builder.config.ts` 的 `storage` 下（S3 / B2 / GitHub 通用）：
+  - `maxAttempts`（默认 `3`）、`retryBaseDelayMs`（`300`）、`retryMaxDelayMs`（`4000`）、`uploadTimeoutMs`（`60000`，`0` 表示不限制）。
+  - 只对瞬时错误重试（网络错误、超时、408/425/429/5xx）；401/403/404/422 直接失败。
+  - 上传最终失败的照片会写进 manifest 的 `lastProcessSuccess: false` / `uploadFailures`，构建结束时会汇总；**下一次增量构建会自动重新处理这些照片**。
+
 ### 图片格式
 
 | 产物 | 格式 | 参数 | 说明 |

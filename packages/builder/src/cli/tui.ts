@@ -1,4 +1,4 @@
-/* eslint-disable unicorn/prefer-single-call */
+import process from 'node:process'
 import { format as utilFormat } from 'node:util'
 
 import type {
@@ -14,7 +14,7 @@ type RunStatus = 'idle' | 'running' | 'success' | 'error'
 interface RunMetadata {
   runMode: string
   concurrency: number
-  processingMode: 'cluster' | 'worker'
+  processingMode: BuildProgressStartPayload['mode']
 }
 
 interface ProgressState extends BuildProgressSnapshot {}
@@ -45,6 +45,7 @@ export class BuilderTUI {
     error: null,
     logs: [],
   }
+
   private lastFrame = ''
   private isAttached = false
   private startTimestamp: number | null = null
@@ -54,14 +55,18 @@ export class BuilderTUI {
   }
 
   attach(): void {
-    if (this.isAttached) return
+    if (this.isAttached) {
+      return
+    }
     this.isAttached = true
     this.hideCursor()
     this.render(true)
   }
 
   detach(): void {
-    if (!this.isAttached) return
+    if (!this.isAttached) {
+      return
+    }
     this.clearScreen()
     this.showCursor()
     this.isAttached = false
@@ -70,7 +75,8 @@ export class BuilderTUI {
     if (this.state.status === 'success' && this.state.summary) {
       const summaryLine = this.formatSuccessSummary(this.state.summary)
       this.stream.write(`${summaryLine}\n`)
-    } else if (this.state.status === 'error' && this.state.error) {
+    }
+    else if (this.state.status === 'error' && this.state.error) {
       this.stream.write(`${color('构建失败：', 'red')}${this.state.error}\n`)
     }
   }
@@ -83,7 +89,7 @@ export class BuilderTUI {
   handleLog(message: LogMessage): void {
     const timestamp = formatTime(message.timestamp)
     const levelLabel = formatLevel(message.level)
-    const formatted = utilFormat(...(message.args as any[]))
+    const formatted = utilFormat(...(message.args as unknown[]))
     const line = `${color(timestamp, 'gray')} ${levelLabel} ${color(`[${message.tag}]`, 'blue')} ${formatted}`
     this.state.logs = [...this.state.logs, line].slice(-MAX_LOG_LINES)
     this.render()
@@ -94,6 +100,13 @@ export class BuilderTUI {
       onStart: (payload: BuildProgressStartPayload) => {
         this.startTimestamp = Date.now()
         this.state.status = 'running'
+        if (this.state.runMeta) {
+          this.state.runMeta = {
+            ...this.state.runMeta,
+            concurrency: payload.concurrency,
+            processingMode: payload.mode,
+          }
+        }
         this.state.progress = {
           total: payload.total,
           completed: 0,
@@ -133,7 +146,9 @@ export class BuilderTUI {
   }
 
   private render(force = false): void {
-    if (!this.isAttached) return
+    if (!this.isAttached) {
+      return
+    }
 
     const frame = this.composeFrame()
     if (!force && frame === this.lastFrame) {
@@ -169,11 +184,11 @@ export class BuilderTUI {
     const parts = [
       color('📸 Afilmory Builder', 'cyan'),
       `模式: ${color(meta.runMode, 'green')}`,
-      `处理: ${color(meta.processingMode === 'cluster' ? '多进程集群' : '并发线程池', 'green')}`,
+      `处理: ${color(meta.processingMode === 'cpu-worker' ? '多进程 CPU 池' : '同进程', 'green')}`,
       `并发: ${color(String(meta.concurrency), 'green')}`,
     ]
     const header = parts.join(' · ')
-    return header.length > columns ? header.slice(0, columns - 1) : header
+    return truncateAnsi(header, columns - 1)
   }
 
   private composeProgress(columns: number): string {
@@ -237,37 +252,38 @@ export class BuilderTUI {
   private formatSuccessSummary(summary: SummaryState): string {
     const { result, durationMs } = summary
     const durationSeconds = Math.round(durationMs / 1000)
+    const uploadFailed = result.uploadFailedCount > 0 ? ` · 上传失败 ${result.uploadFailedCount}` : ''
     return color(
-      `✅ 构建成功 · 照片 ${result.totalPhotos} · 新增 ${result.newCount} · 更新 ${result.processedCount} · 删除 ${result.deletedCount} · 耗时 ${formatDuration(durationSeconds)}`,
+      `✅ 构建成功 · 照片 ${result.totalPhotos} · 新增 ${result.newCount} · 更新 ${result.processedCount} · 删除 ${result.deletedCount}${uploadFailed} · 耗时 ${formatDuration(durationSeconds)}`,
       'green',
     )
   }
 
   private clearScreen(): void {
-    this.stream.write('\u001b[0;0H')
-    this.stream.write('\u001b[2J')
+    this.stream.write('\u001B[0;0H')
+    this.stream.write('\u001B[2J')
   }
 
   private hideCursor(): void {
-    this.stream.write('\u001b[?25l')
+    this.stream.write('\u001B[?25l')
   }
 
   private showCursor(): void {
-    this.stream.write('\u001b[?25h')
+    this.stream.write('\u001B[?25h')
   }
 }
 
 function color(text: string, tone: 'cyan' | 'green' | 'yellow' | 'red' | 'gray' | 'blue' | 'magenta'): string {
   const codes: Record<typeof tone, string> = {
-    cyan: '\u001b[36m',
-    green: '\u001b[32m',
-    yellow: '\u001b[33m',
-    red: '\u001b[31m',
-    gray: '\u001b[90m',
-    blue: '\u001b[34m',
-    magenta: '\u001b[35m',
+    cyan: '\u001B[36m',
+    green: '\u001B[32m',
+    yellow: '\u001B[33m',
+    red: '\u001B[31m',
+    gray: '\u001B[90m',
+    blue: '\u001B[34m',
+    magenta: '\u001B[35m',
   } as const
-  return `${codes[tone]}${text}\u001b[0m`
+  return `${codes[tone]}${text}\u001B[0m`
 }
 
 function formatLevel(level: string): string {
@@ -319,4 +335,56 @@ function truncateMiddle(value: string, maxLength: number): string {
   }
   const half = Math.max(1, Math.floor((limit - 1) / 2))
   return `${value.slice(0, half)}…${value.slice(value.length - half)}`
+}
+
+function isWideCodePoint(codePoint: number): boolean {
+  return (
+    codePoint >= 0x1100
+    && (codePoint <= 0x115F
+      || codePoint === 0x2329
+      || codePoint === 0x232A
+      || (codePoint >= 0x2E80 && codePoint <= 0xA4CF && codePoint !== 0x303F)
+      || (codePoint >= 0xAC00 && codePoint <= 0xD7A3)
+      || (codePoint >= 0xF900 && codePoint <= 0xFAFF)
+      || (codePoint >= 0xFE10 && codePoint <= 0xFE19)
+      || (codePoint >= 0xFE30 && codePoint <= 0xFE6F)
+      || (codePoint >= 0xFF00 && codePoint <= 0xFF60)
+      || (codePoint >= 0xFFE0 && codePoint <= 0xFFE6)
+      || codePoint >= 0x1F300)
+  )
+}
+
+function truncateAnsi(value: string, maxColumns: number): string {
+  const limit = Math.max(1, maxColumns)
+  let out = ''
+  let visible = 0
+  let hasAnsi = false
+  let i = 0
+
+  while (i < value.length) {
+    if (value[i] === '\u001B' && value[i + 1] === '[') {
+      const end = value.indexOf('m', i + 2)
+      if (end !== -1) {
+        out += value.slice(i, end + 1)
+        hasAnsi = true
+        i = end + 1
+        continue
+      }
+    }
+
+    const codePoint = value.codePointAt(i)
+    if (codePoint === undefined) {
+      break
+    }
+    const char = String.fromCodePoint(codePoint)
+    const width = isWideCodePoint(codePoint) ? 2 : 1
+    if (visible + width > limit) {
+      break
+    }
+    out += char
+    visible += width
+    i += char.length
+  }
+
+  return hasAnsi ? `${out}\u001B[0m` : out
 }

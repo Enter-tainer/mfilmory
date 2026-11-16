@@ -99,9 +99,13 @@ export function isBitmap(buf: Buffer): boolean {
 /**
  * 将 BMP Buffer 转换为 Sharp 实例
  * @param bmpBuffer Buffer
+ * @param limitInputPixels Sharp 输入像素上限
  * @returns Sharp 实例
  */
-export async function convertBmpToJpegSharpInstance(bmpBuffer: Buffer): Promise<Sharp> {
+export async function convertBmpToJpegSharpInstance(
+  bmpBuffer: Buffer,
+  limitInputPixels?: number | boolean,
+): Promise<Sharp> {
   const log = getGlobalLoggers().image
 
   try {
@@ -123,6 +127,7 @@ export async function convertBmpToJpegSharpInstance(bmpBuffer: Buffer): Promise<
 
     // Create Sharp instance with the correct channel count
     const sharpInstance = sharp(bmpImage.data, {
+      limitInputPixels,
       raw: { width: bmpImage.width, height: bmpImage.height, channels },
     }).jpeg()
 

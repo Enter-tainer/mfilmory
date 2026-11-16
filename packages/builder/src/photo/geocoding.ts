@@ -2,16 +2,60 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import process from 'node:process'
 
 import type { LocationInfo, PickedExif } from '@afilmory/typing'
 
 import { getGlobalLoggers } from './logger-adapter.js'
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+function createAbortError(reason?: unknown): Error {
+  if (reason instanceof Error) {
+    return reason
+  }
+  const error = new Error(typeof reason === 'string' ? reason : 'Geocoding aborted')
+  error.name = 'AbortError'
+  return error
+}
+
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(createAbortError(signal.reason))
+  }
+  if (ms <= 0) {
+    return Promise.resolve()
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(createAbortError(signal?.reason))
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+function combineAbortSignals(timeoutMs: number, signal?: AbortSignal): AbortSignal {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs)
+  return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
+}
+
 const getBackoffDelay = (attempt: number, baseDelay: number): number => {
   const exponential = baseDelay * 2 ** (attempt - 1)
   const jitter = Math.random() * baseDelay
   return exponential + jitter
+}
+
+class NonRetryableGeocodeError extends Error {
+  readonly isNotFound: boolean
+
+  constructor(message: string, isNotFound = false) {
+    super(message)
+    this.name = 'NonRetryableGeocodeError'
+    this.isNotFound = isNotFound
+  }
 }
 
 const INTERPROCESS_RATE_LIMIT_DIR = path.join(os.tmpdir(), 'afilmory-geocoding-rate-limit')
@@ -28,7 +72,7 @@ const ensureRateLimitDir = async (): Promise<void> => {
 
 const hashKey = (key: string): string => createHash('sha1').update(key).digest('hex')
 
-const getRateLimitPaths = (key: string): { lockPath: string; timestampPath: string } => {
+const getRateLimitPaths = (key: string): { lockPath: string, timestampPath: string } => {
   const hashedKey = hashKey(key)
   return {
     lockPath: path.join(INTERPROCESS_RATE_LIMIT_DIR, `${hashedKey}.lock`),
@@ -44,7 +88,8 @@ const isLockStale = async (lockPath: string): Promise<boolean> => {
   try {
     const stat = await fs.stat(lockPath)
     return Date.now() - stat.mtimeMs > LOCK_STALE_TIMEOUT_MS
-  } catch (error) {
+  }
+  catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return false
     }
@@ -52,30 +97,35 @@ const isLockStale = async (lockPath: string): Promise<boolean> => {
   }
 }
 
-async function withInterprocessLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+async function withInterprocessLock<T>(key: string, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   await ensureRateLimitDir()
   const { lockPath } = getRateLimitPaths(key)
 
   while (true) {
+    if (signal?.aborted) {
+      throw createAbortError(signal.reason)
+    }
+
     try {
       const handle = await fs.open(lockPath, 'wx')
       await handle.write(`${process.pid}:${Date.now()}`)
       await handle.close()
 
       try {
-        const result = await fn()
-        return result
-      } finally {
+        return await fn()
+      }
+      finally {
         await tryRemoveLock(lockPath)
       }
-    } catch (error) {
+    }
+    catch (error) {
       const nodeError = error as NodeJS.ErrnoException
       if (nodeError.code === 'EEXIST') {
         if (await isLockStale(lockPath)) {
           await tryRemoveLock(lockPath)
           continue
         }
-        await sleep(LOCK_RETRY_DELAY_MS)
+        await abortableSleep(LOCK_RETRY_DELAY_MS, signal)
         continue
       }
       throw error
@@ -83,28 +133,41 @@ async function withInterprocessLock<T>(key: string, fn: () => Promise<T>): Promi
   }
 }
 
-const applyInterprocessRateLimit = async (key: string, intervalMs: number): Promise<void> => {
+const applyInterprocessRateLimit = async (
+  key: string,
+  intervalMs: number,
+  signal?: AbortSignal,
+): Promise<void> => {
   const { timestampPath } = getRateLimitPaths(key)
 
-  await withInterprocessLock(key, async () => {
-    let lastRequestTime = 0
-    try {
-      const stat = await fs.stat(timestampPath)
-      lastRequestTime = stat.mtimeMs
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw error
+  await withInterprocessLock(
+    key,
+    async () => {
+      let lastRequestTime = 0
+      try {
+        const stat = await fs.stat(timestampPath)
+        lastRequestTime = stat.mtimeMs
       }
-    }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          throw error
+        }
+      }
 
-    const now = Date.now()
-    const elapsed = now - lastRequestTime
-    if (elapsed < intervalMs) {
-      await sleep(intervalMs - elapsed)
-    }
+      const now = Date.now()
+      const elapsed = now - lastRequestTime
+      if (elapsed < intervalMs) {
+        await abortableSleep(intervalMs - elapsed, signal)
+      }
 
-    await fs.writeFile(timestampPath, `${Date.now()}`)
-  })
+      if (signal?.aborted) {
+        throw createAbortError(signal.reason)
+      }
+
+      await fs.writeFile(timestampPath, `${Date.now()}`)
+    },
+    signal,
+  )
 }
 
 class SequentialRateLimiter {
@@ -113,20 +176,34 @@ class SequentialRateLimiter {
 
   constructor(private readonly intervalMs: number) {}
 
-  wait(): Promise<void> {
-    this.queue = this.queue.then(async () => {
+  wait(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) {
+      return Promise.reject(createAbortError(signal.reason))
+    }
+
+    const next = this.queue.then(async () => {
+      if (signal?.aborted) {
+        throw createAbortError(signal.reason)
+      }
+
       const now = Date.now()
       const elapsed = now - this.lastTimestamp
       const delay = elapsed < this.intervalMs ? this.intervalMs - elapsed : 0
 
       if (delay > 0) {
-        await sleep(delay)
+        await abortableSleep(delay, signal)
+      }
+
+      if (signal?.aborted) {
+        throw createAbortError(signal.reason)
       }
 
       this.lastTimestamp = Date.now()
     })
 
-    return this.queue
+    // Prevent an aborted waiter from breaking subsequent callers in the chain
+    this.queue = next.catch(() => {})
+    return next
   }
 }
 
@@ -151,11 +228,69 @@ const getGlobalRateLimiter = (key: string, intervalMs: number): SequentialRateLi
   return limiter
 }
 
+async function runGeocodeWithRetries(params: {
+  providerLabel: string
+  maxRetries: number
+  retryBaseDelayMs: number
+  signal?: AbortSignal
+  applyRateLimit: (signal?: AbortSignal) => Promise<void>
+  attemptRequest: (requestSignal: AbortSignal) => Promise<LocationInfo | null>
+}): Promise<LocationInfo | null> {
+  const log = getGlobalLoggers().location
+  const { providerLabel, maxRetries, retryBaseDelayMs, signal, applyRateLimit, attemptRequest } = params
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    if (signal?.aborted) {
+      return null
+    }
+
+    try {
+      await applyRateLimit(signal)
+      const requestSignal = combineAbortSignals(15_000, signal)
+      return await attemptRequest(requestSignal)
+    }
+    catch (error) {
+      if (signal?.aborted) {
+        return null
+      }
+
+      if (error instanceof NonRetryableGeocodeError) {
+        if (error.isNotFound) {
+          log.warn(error.message)
+        }
+        else {
+          log.error(error.message)
+        }
+        return null
+      }
+
+      const isLastAttempt = attempt === maxRetries
+      if (isLastAttempt) {
+        log.error(`${providerLabel} 反向地理编码失败:`, error)
+        break
+      }
+
+      const delay = getBackoffDelay(attempt, retryBaseDelayMs)
+      log.warn(`${providerLabel} API 调用失败，${Math.round(delay)}ms 后重试 (${attempt}/${maxRetries})`, error)
+      try {
+        await abortableSleep(delay, signal)
+      }
+      catch {
+        if (signal?.aborted) {
+          return null
+        }
+      }
+    }
+  }
+
+  return null
+}
+
 /**
  * 地理编码提供者接口
  */
 export interface GeocodingProvider {
-  reverseGeocode: (lat: number, lon: number) => Promise<LocationInfo | null>
+  reverseGeocode: (lat: number, lon: number, signal?: AbortSignal) => Promise<LocationInfo | null>
 }
 
 /**
@@ -179,13 +314,16 @@ export class MapboxGeocodingProvider implements GeocodingProvider {
     this.interprocessKey = `mapbox:${accessToken}`
   }
 
-  async reverseGeocode(lat: number, lon: number): Promise<LocationInfo | null> {
+  async reverseGeocode(lat: number, lon: number, signal?: AbortSignal): Promise<LocationInfo | null> {
     const log = getGlobalLoggers().location
 
-    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
-      try {
-        await this.applyRateLimit()
-
+    return await runGeocodeWithRetries({
+      providerLabel: 'Mapbox',
+      maxRetries: this.maxRetries,
+      retryBaseDelayMs: this.retryBaseDelayMs,
+      signal,
+      applyRateLimit: abortSignal => this.applyRateLimit(abortSignal),
+      attemptRequest: async (requestSignal) => {
         const url = new URL('/search/geocode/v6/reverse', this.baseUrl)
         url.searchParams.set('access_token', this.accessToken)
         url.searchParams.set('longitude', lon.toString())
@@ -196,10 +334,17 @@ export class MapboxGeocodingProvider implements GeocodingProvider {
 
         log.info(`调用 Mapbox API: ${lat}, ${lon}`)
 
-        const response = await fetch(url.toString())
+        const response = await fetch(url.toString(), {
+          signal: requestSignal,
+        })
 
         if (!response.ok) {
-          throw new Error(`Mapbox API 错误: ${response.status} ${response.statusText}`)
+          await response.body?.cancel().catch(() => {})
+          const message = `Mapbox API 错误: ${response.status} ${response.statusText}`
+          if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
+            throw new NonRetryableGeocodeError(message)
+          }
+          throw new Error(message)
         }
 
         const data = await response.json()
@@ -242,25 +387,13 @@ export class MapboxGeocodingProvider implements GeocodingProvider {
           city,
           locationName,
         }
-      } catch (error) {
-        const isLastAttempt = attempt === this.maxRetries
-        if (isLastAttempt) {
-          log.error('Mapbox 反向地理编码失败:', error)
-          break
-        }
-
-        const delay = getBackoffDelay(attempt, this.retryBaseDelayMs)
-        log.warn(`Mapbox API 调用失败，${Math.round(delay)}ms 后重试 (${attempt}/${this.maxRetries})`, error)
-        await sleep(delay)
-      }
-    }
-
-    return null
+      },
+    })
   }
 
-  private async applyRateLimit(): Promise<void> {
-    await this.rateLimiter.wait()
-    await applyInterprocessRateLimit(this.interprocessKey, this.rateLimitMs)
+  private async applyRateLimit(signal?: AbortSignal): Promise<void> {
+    await this.rateLimiter.wait(signal)
+    await applyInterprocessRateLimit(this.interprocessKey, this.rateLimitMs, signal)
   }
 }
 
@@ -285,13 +418,16 @@ export class NominatimGeocodingProvider implements GeocodingProvider {
     this.interprocessKey = `nominatim:${this.baseUrl}`
   }
 
-  async reverseGeocode(lat: number, lon: number): Promise<LocationInfo | null> {
+  async reverseGeocode(lat: number, lon: number, signal?: AbortSignal): Promise<LocationInfo | null> {
     const log = getGlobalLoggers().location
 
-    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
-      try {
-        await this.applyRateLimit()
-
+    return await runGeocodeWithRetries({
+      providerLabel: 'Nominatim',
+      maxRetries: this.maxRetries,
+      retryBaseDelayMs: this.retryBaseDelayMs,
+      signal,
+      applyRateLimit: abortSignal => this.applyRateLimit(abortSignal),
+      attemptRequest: async (requestSignal) => {
         const url = new URL('/reverse', this.baseUrl)
         url.searchParams.set('lat', lat.toString())
         url.searchParams.set('lon', lon.toString())
@@ -304,6 +440,7 @@ export class NominatimGeocodingProvider implements GeocodingProvider {
         log.info(`调用 Nominatim API: ${lat}, ${lon}`)
 
         const response = await fetch(url.toString(), {
+          signal: requestSignal,
           headers: {
             'User-Agent': this.userAgent,
             ...(this.language ? { 'Accept-Language': this.language } : {}),
@@ -311,13 +448,22 @@ export class NominatimGeocodingProvider implements GeocodingProvider {
         })
 
         if (!response.ok) {
-          throw new Error(`Nominatim API 错误: ${response.status} ${response.statusText}`)
+          await response.body?.cancel().catch(() => {})
+          const message = `Nominatim API 错误: ${response.status} ${response.statusText}`
+          if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
+            throw new NonRetryableGeocodeError(message)
+          }
+          throw new Error(message)
         }
 
         const data = await response.json()
 
         if (!data || data.error) {
-          throw new Error(`Nominatim API 返回错误: ${data?.error}`)
+          const errorText = String(data?.error ?? '未知错误')
+          if (/unable to geocode/i.test(errorText)) {
+            throw new NonRetryableGeocodeError(`Nominatim 无法解析坐标: ${errorText}`, true)
+          }
+          throw new Error(`Nominatim API 返回错误: ${errorText}`)
         }
 
         const address = data.address || {}
@@ -354,25 +500,13 @@ export class NominatimGeocodingProvider implements GeocodingProvider {
           city,
           locationName,
         }
-      } catch (error) {
-        const isLastAttempt = attempt === this.maxRetries
-        if (isLastAttempt) {
-          log.error('Nominatim 反向地理编码失败:', error)
-          break
-        }
-
-        const delay = getBackoffDelay(attempt, this.retryBaseDelayMs)
-        log.warn(`Nominatim API 调用失败，${Math.round(delay)}ms 后重试 (${attempt}/${this.maxRetries})`, error)
-        await sleep(delay)
-      }
-    }
-
-    return null
+      },
+    })
   }
 
-  private async applyRateLimit(): Promise<void> {
-    await this.rateLimiter.wait()
-    await applyInterprocessRateLimit(this.interprocessKey, this.rateLimitMs)
+  private async applyRateLimit(signal?: AbortSignal): Promise<void> {
+    await this.rateLimiter.wait(signal)
+    await applyInterprocessRateLimit(this.interprocessKey, this.rateLimitMs, signal)
   }
 }
 
@@ -418,9 +552,22 @@ export function parseGPSCoordinates(exif: PickedExif): {
     let longitude: number | undefined
 
     // 从 GPSLatitude 和 GPSLongitude 提取
-    if (exif.GPSLatitude !== undefined && exif.GPSLongitude !== undefined) {
-      latitude = Number(exif.GPSLatitude)
-      longitude = Number(exif.GPSLongitude)
+    const rawLat = exif.GPSLatitude
+    const rawLon = exif.GPSLongitude
+    if (
+      rawLat !== undefined
+      && rawLat !== null
+      && rawLon !== undefined
+      && rawLon !== null
+      && String(rawLat).trim() !== ''
+      && String(rawLon).trim() !== ''
+    ) {
+      const parsedLat = Number(rawLat)
+      const parsedLon = Number(rawLon)
+      if (Number.isFinite(parsedLat) && Number.isFinite(parsedLon)) {
+        latitude = parsedLat
+        longitude = parsedLon
+      }
     }
 
     if (latitude === undefined || longitude === undefined) {
@@ -436,7 +583,8 @@ export function parseGPSCoordinates(exif: PickedExif): {
     }
 
     return { latitude, longitude }
-  } catch (error) {
+  }
+  catch (error) {
     log.error('解析 GPS 坐标失败:', error)
     return {}
   }
@@ -447,34 +595,49 @@ export function parseGPSCoordinates(exif: PickedExif): {
  * @param latitude 纬度
  * @param longitude 经度
  * @param provider 地理编码提供者
+ * @param signal 可选中止信号
  * @returns 位置信息
  */
 export async function extractLocationFromGPS(
   latitude: number,
   longitude: number,
   provider: GeocodingProvider,
+  signal?: AbortSignal,
 ): Promise<LocationInfo | null> {
   const log = getGlobalLoggers().location
 
   // 验证坐标范围
-  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
     log.warn(`无效的 GPS 坐标: ${latitude}, ${longitude}`)
+    return null
+  }
+
+  if (signal?.aborted) {
     return null
   }
 
   log.info(`反向地理编码坐标: ${latitude}, ${longitude}`)
 
   try {
-    const locationInfo = await provider.reverseGeocode(latitude, longitude)
+    const locationInfo = await provider.reverseGeocode(latitude, longitude, signal)
+
+    if (signal?.aborted) {
+      return null
+    }
 
     if (locationInfo) {
       log.success(`位置已找到: ${locationInfo.city}, ${locationInfo.country}`)
-    } else {
+    }
+    else {
       log.warn('未找到位置信息')
     }
 
     return locationInfo
-  } catch (error) {
+  }
+  catch (error) {
+    if (signal?.aborted) {
+      return null
+    }
     log.error('位置提取失败:', error)
     return null
   }

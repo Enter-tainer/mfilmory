@@ -36,6 +36,26 @@ export const PREVIEW_BITDEPTH = 10
 /** 参数签名；入口门禁也用它判断「参数变没变」（文件名不随参数变化）。 */
 export const PREVIEW_SIGNATURE = `inside-${PREVIEW_SIZE}q${PREVIEW_QUALITY}e6b${PREVIEW_BITDEPTH}.${PREVIEW_EXTENSION}`
 
+export async function encodePreviewBuffer(
+  imageBuffer: Buffer,
+  limitInputPixels?: number | boolean,
+): Promise<Buffer> {
+  const bitdepth = await resolveAvifBitdepth(PREVIEW_BITDEPTH, imageBuffer, limitInputPixels)
+  return await sharp(imageBuffer, { limitInputPixels })
+    .rotate()
+    .resize({ width: PREVIEW_SIZE, height: PREVIEW_SIZE, fit: 'inside', withoutEnlargement: true })
+    .avif({ quality: PREVIEW_QUALITY, effort: 6, bitdepth })
+    .toBuffer()
+}
+
+export async function savePreviewToDisk(photoId: string, previewBuffer: Buffer): Promise<string> {
+  const { previewPath, previewUrl } = getPreviewPaths(photoId)
+  await fs.mkdir(PREVIEW_DIR, { recursive: true })
+  await fs.writeFile(previewPath, previewBuffer)
+  await writeSignature('preview', photoId, PREVIEW_SIGNATURE)
+  return previewUrl
+}
+
 export function getPreviewFilename(photoId: string): string {
   return `${photoId}.${PREVIEW_EXTENSION}`
 }
@@ -75,9 +95,8 @@ export async function generatePreview(
   const log = getGlobalLoggers().thumbnail
 
   // 参数签名没变且文件存在 → 直接复用；--force-thumbnails 也不会重复编码
-  const signature = PREVIEW_SIGNATURE
   const forceHard = forceRegenerate && hardForceEncode()
-  if (!forceHard && (await previewExists(photoId)) && (await signatureMatches('preview', photoId, signature))) {
+  if (!forceHard && (await previewExists(photoId)) && (await signatureMatches('preview', photoId, PREVIEW_SIGNATURE))) {
     try {
       return { previewUrl, previewBuffer: await fs.readFile(previewPath) }
     }
@@ -88,12 +107,7 @@ export async function generatePreview(
 
   const startTime = Date.now()
   try {
-    const bitdepth = await resolveAvifBitdepth(PREVIEW_BITDEPTH, imageBuffer, limitInputPixels)
-    const previewBuffer = await sharp(imageBuffer, { limitInputPixels })
-      .rotate()
-      .resize({ width: PREVIEW_SIZE, height: PREVIEW_SIZE, fit: 'inside', withoutEnlargement: true })
-      .avif({ quality: PREVIEW_QUALITY, effort: 6, bitdepth })
-      .toBuffer()
+    const previewBuffer = await encodePreviewBuffer(imageBuffer, limitInputPixels)
 
     if (persistToDisk) {
       await fs.mkdir(PREVIEW_DIR, { recursive: true })
@@ -103,7 +117,7 @@ export async function generatePreview(
     log?.info(`生成占位图：${photoId} (${Math.round(previewBuffer.length / 1024)}KB, ${Date.now() - startTime}ms)`)
     // --dry-run 不落盘时不记签名，否则下次构建会以为已是新参数产物而永久跳过
     if (persistToDisk) {
-      await writeSignature('preview', photoId, signature)
+      await writeSignature('preview', photoId, PREVIEW_SIGNATURE)
     }
     return { previewUrl, previewBuffer }
   }

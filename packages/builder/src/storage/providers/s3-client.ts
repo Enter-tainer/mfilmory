@@ -21,27 +21,35 @@ export class S3ProviderClient {
     })
   }
 
-  async headObject(key: string): Promise<Response> {
+  async headObject(key: string, init?: RequestInit): Promise<Response> {
     return await this.client.fetch(this.buildObjectUrl(key), {
       method: 'HEAD',
+      ...init,
     })
   }
 
-  async putObject(key: string, body: BodyInit, headers?: HeadersInit): Promise<Response> {
+  async putObject(key: string, body: BodyInit, headers?: HeadersInit, init?: RequestInit): Promise<Response> {
     return await this.client.fetch(this.buildObjectUrl(key), {
       method: 'PUT',
       body,
       headers,
+      ...init,
     })
   }
 
-  async deleteObject(key: string): Promise<Response> {
+  async deleteObject(key: string, init?: RequestInit): Promise<Response> {
     return await this.client.fetch(this.buildObjectUrl(key), {
       method: 'DELETE',
+      ...init,
     })
   }
 
-  async copyObject(sourceKey: string, targetKey: string, headers?: HeadersInit): Promise<Response> {
+  async copyObject(
+    sourceKey: string,
+    targetKey: string,
+    headers?: HeadersInit,
+    init?: RequestInit,
+  ): Promise<Response> {
     const copySource = `/${this.client.bucket}/${encodeS3Key(sourceKey)}`
     return await this.client.fetch(this.buildObjectUrl(targetKey), {
       method: 'PUT',
@@ -49,6 +57,7 @@ export class S3ProviderClient {
         'x-amz-copy-source': copySource,
         ...headers,
       },
+      ...init,
     })
   }
 
@@ -56,6 +65,7 @@ export class S3ProviderClient {
     prefix?: string | null
     maxKeys?: number
     continuationToken?: string
+    signal?: AbortSignal
   }): Promise<Response> {
     const url = new URL(this.buildObjectUrl())
     url.searchParams.set('list-type', '2')
@@ -68,24 +78,29 @@ export class S3ProviderClient {
     if (params?.continuationToken) {
       url.searchParams.set('continuation-token', params.continuationToken)
     }
-    return await this.client.fetch(url.toString(), { method: 'GET' })
+    return await this.client.fetch(url.toString(), {
+      method: 'GET',
+      signal: params?.signal,
+    })
   }
 
   async moveObject(
     sourceKey: string,
     targetKey: string,
-    options?: { headers?: HeadersInit },
-  ): Promise<{ metadata: { key: string; size?: number; etag?: string | null; lastModified?: Date } }> {
-    const copyResponse = await this.copyObject(sourceKey, targetKey, options?.headers)
+    options?: { headers?: HeadersInit, signal?: AbortSignal },
+  ): Promise<{ metadata: { key: string, size?: number, etag?: string | null, lastModified?: Date } }> {
+    const reqInit = options?.signal ? { signal: options.signal } : undefined
+    const copyResponse = await this.copyObject(sourceKey, targetKey, options?.headers, reqInit)
     if (!copyResponse.ok) {
       const text = await copyResponse.text().catch(() => '')
       throw new Error(
         `复制 S3 对象失败：${sourceKey} -> ${targetKey} (status ${copyResponse.status}) ${text ? text.slice(0, 200) : ''}`,
       )
     }
+    await copyResponse.body?.cancel().catch(() => {})
 
-    let metadata: { key: string; size?: number; etag?: string | null; lastModified?: Date } = { key: targetKey }
-    const headResponse = await this.headObject(targetKey)
+    let metadata: { key: string, size?: number, etag?: string | null, lastModified?: Date } = { key: targetKey }
+    const headResponse = await this.headObject(targetKey, reqInit)
     if (headResponse.ok) {
       const size = headResponse.headers.get('content-length')
       const etag = headResponse.headers.get('etag')
@@ -97,10 +112,11 @@ export class S3ProviderClient {
         lastModified: lastModified ? new Date(lastModified) : undefined,
       }
     }
+    await headResponse.body?.cancel().catch(() => {})
 
-    const deleteResponse = await this.deleteObject(sourceKey)
+    const deleteResponse = await this.deleteObject(sourceKey, reqInit)
     if (!deleteResponse.ok) {
-      await this.deleteObject(targetKey).catch(() => {
+      await this.deleteObject(targetKey, reqInit).catch(() => {
         /* ignore */
       })
       const text = await deleteResponse.text().catch(() => '')
@@ -108,6 +124,7 @@ export class S3ProviderClient {
         `删除源对象失败：${sourceKey} (status ${deleteResponse.status}) ${text ? text.slice(0, 200) : ''}`,
       )
     }
+    await deleteResponse.body?.cancel().catch(() => {})
 
     return { metadata }
   }

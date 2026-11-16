@@ -4,6 +4,7 @@ import type { AfilmoryBuilder, BuilderOptions } from '../builder/builder.js'
 import { logger } from '../logger/index.js'
 import type { PluginRunState } from '../plugins/manager.js'
 import type { S3ObjectLike } from '../types/s3.js'
+import type { BuilderRuntimePools } from './execution-context.js'
 import { createStorageKeyNormalizer, runWithPhotoExecutionContext } from './execution-context.js'
 import type { PhotoProcessingContext } from './image-pipeline.js'
 import { processPhotoWithPipeline } from './image-pipeline.js'
@@ -16,6 +17,10 @@ export interface PhotoProcessorOptions {
   xmpKeywordsEnabled: boolean
   xmpRegionsEnabled: boolean
   dryRun?: boolean
+  /**
+   * 媒体格式版本（宽度 / 质量 / 位深）已变化：所有照片都要重新生成缩略图 / 占位图。
+   */
+  mediaFormatStale?: boolean
 }
 
 // 处理单张照片
@@ -31,10 +36,14 @@ export async function processPhoto(
   pluginRuntime: {
     runState: PluginRunState
     builderOptions: BuilderOptions
+    pools?: BuilderRuntimePools
+    releaseStage1Gate?: () => void
+    acquireStage2Gate?: () => Promise<() => void>
   },
 ): Promise<ProcessPhotoResult> {
   const key = obj.Key
   if (!key) {
+    pluginRuntime.releaseStage1Gate?.()
     logger.image.warn(`跳过没有 Key 的对象`)
     return { item: null, type: 'failed' }
   }
@@ -62,6 +71,7 @@ export async function processPhoto(
       storageConfig,
       normalizeStorageKey: createStorageKeyNormalizer(storageConfig),
       loggers: photoLoggers,
+      pools: pluginRuntime.pools ?? builder.getRuntimePools(),
     },
     async () => {
       photoLoggers.image.info(`📸 [${index + 1}/${totalImages}] ${key}`)

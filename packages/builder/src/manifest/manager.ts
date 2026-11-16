@@ -58,9 +58,11 @@ export function needsUpdate(existingItem: PhotoManifestItem | undefined, s3Objec
   if (!s3Object.LastModified) return true
 
   const existingModified = new Date(existingItem.lastModified)
-  const s3Modified = s3Object.LastModified
+  if (Number.isNaN(existingModified.getTime())) {
+    return true
+  }
 
-  return s3Modified > existingModified
+  return s3Object.LastModified.getTime() !== existingModified.getTime()
 }
 
 // 保存 manifest

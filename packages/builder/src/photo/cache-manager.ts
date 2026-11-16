@@ -33,6 +33,16 @@ export async function shouldProcessPhoto(
     return { shouldProcess: true, reason: '新照片' }
   }
 
+  // 编码参数（宽度 / 质量 / 位深）变了：产物文件名不含参数，必须放行到 pipeline 重编
+  if (options.mediaFormatStale) {
+    return { shouldProcess: true, reason: '媒体格式版本已变化' }
+  }
+
+  // 上次有产物没上传成功：即使文件没变也要重试
+  if (existingItem.lastProcessSuccess === false || (existingItem.uploadFailures?.length ?? 0) > 0) {
+    return { shouldProcess: true, reason: '上次上传失败' }
+  }
+
   // 检查文件是否更新
   const fileNeedsUpdate = existingItem.lastModified !== obj.LastModified?.toISOString()
 

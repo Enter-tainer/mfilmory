@@ -1,6 +1,9 @@
+import type { Logger } from '../../logger/index.js'
+import type { BuilderRuntimePools } from '../../photo/execution-context.js'
 import { StorageManager } from '../../storage/index.js'
 import type { S3CompatibleConfig, StorageConfig } from '../../storage/interfaces.js'
 import type { BuilderPlugin } from '../types.js'
+import { recordUploadFailure } from '../upload-failure.js'
 import type { ThumbnailPluginData } from './shared.js'
 import {
   contentTypeFromFilename,
@@ -34,8 +37,14 @@ interface ResolvedPluginConfig {
   enabled: boolean
 }
 
+interface UploadAttemptResult {
+  ok: boolean
+  error?: unknown
+}
+
 interface PluginRunState {
   uploaded: Set<string>
+  inflightUploads: Map<string, Promise<UploadAttemptResult>>
   urlCache: Map<string, string>
 }
 
@@ -46,15 +55,17 @@ function normalizeDirectory(directory: string | undefined): string {
 }
 
 function trimSlashes(value: string | undefined | null): string | null {
-  if (!value) return null
+  if (!value) {
+    return null
+  }
   const normalized = value.replaceAll('\\', '/').replaceAll(/^\/+|\/+$/g, '')
   return normalized.length > 0 ? normalized : null
 }
 
 function joinSegments(...segments: Array<string | null | undefined>): string {
   const filtered = segments
-    .map((segment) => (segment ?? '').replaceAll('\\', '/').replaceAll(/^\/+|\/+$/g, ''))
-    .filter((segment) => segment.length > 0)
+    .map(segment => (segment ?? '').replaceAll('\\', '/').replaceAll(/^\/+|\/+$/g, ''))
+    .filter(segment => segment.length > 0)
   return filtered.join('/')
 }
 
@@ -83,11 +94,74 @@ function getOrCreateRunState(container: Map<string, unknown>): PluginRunState {
   if (!state) {
     state = {
       uploaded: new Set<string>(),
+      inflightUploads: new Map<string, Promise<UploadAttemptResult>>(),
       urlCache: new Map<string, string>(),
     }
     container.set(RUN_STATE_KEY, state)
   }
   return state
+}
+
+async function uploadMediaAsset(params: {
+  storageManager: StorageManager
+  state: PluginRunState
+  remoteKey: string
+  data: ThumbnailPluginData
+  configuredContentType: string
+  pools?: BuilderRuntimePools
+  logger: Logger
+  assetLabel: '缩略图' | '占位图'
+}): Promise<{ url: string | null, failed: boolean, error?: unknown }> {
+  const { storageManager, state, remoteKey, data, configuredContentType, pools, logger, assetLabel } = params
+  const buffer = data.buffer
+  if (!buffer) {
+    return { url: null, failed: false }
+  }
+
+  if (!state.uploaded.has(remoteKey)) {
+    let uploadPromise = state.inflightUploads.get(remoteKey)
+    if (!uploadPromise) {
+      const doUpload = () =>
+        storageManager.uploadFile(remoteKey, buffer, {
+          cacheControl: MEDIA_CACHE_CONTROL,
+          contentType: configuredContentType || contentTypeFromFilename(data.fileName),
+        })
+      uploadPromise = (async (): Promise<UploadAttemptResult> => {
+        try {
+          await (pools ? pools.network.upload(doUpload) : doUpload())
+          state.uploaded.add(remoteKey)
+          return { ok: true }
+        }
+        catch (error) {
+          logger.thumbnail.error(`上传${assetLabel}失败：${remoteKey}`, error)
+          return { ok: false, error }
+        }
+        finally {
+          state.inflightUploads.delete(remoteKey)
+        }
+      })()
+      state.inflightUploads.set(remoteKey, uploadPromise)
+    }
+
+    const outcome = await uploadPromise
+    if (!outcome.ok) {
+      return { url: null, failed: true, error: outcome.error }
+    }
+  }
+
+  let remoteUrl = state.urlCache.get(remoteKey)
+  if (!remoteUrl) {
+    try {
+      remoteUrl = await storageManager.generatePublicUrl(remoteKey)
+      state.urlCache.set(remoteKey, remoteUrl)
+    }
+    catch (error) {
+      logger.thumbnail.error(`生成${assetLabel} URL 失败：${remoteKey}`, error)
+      return { url: null, failed: false }
+    }
+  }
+
+  return { url: remoteUrl, failed: false }
 }
 
 export default function thumbnailStoragePlugin(options: ThumbnailStoragePluginOptions = {}): BuilderPlugin {
@@ -140,11 +214,15 @@ export default function thumbnailStoragePlugin(options: ThumbnailStoragePluginOp
         if (!options.storageConfig) {
           builder.getStorageManager().addExcludePrefix(remotePrefix)
           builder.getStorageManager().addExcludePrefix(previewPrefix)
-        } else {
+        }
+        else {
           externalStorageManager = new StorageManager(uploadableConfig)
         }
       },
-      afterPhotoProcess: async ({ builder, payload, runShared, logger }) => {
+      afterPhotoProcess: async ({ builder, payload, runShared, logger, pools }) => {
+        if (payload.options.dryRun) {
+          return
+        }
         if (!resolved) {
           logger.main.warn('Thumbnail storage plugin is not initialized correctly. Skipping upload.')
           return
@@ -169,66 +247,46 @@ export default function thumbnailStoragePlugin(options: ThumbnailStoragePluginOp
 
         const remoteKey = joinSegments(resolved.remotePrefix, data.fileName)
         const state = getOrCreateRunState(runShared)
-
-        if (!state.uploaded.has(remoteKey)) {
-          try {
-            await storageManager.uploadFile(remoteKey, data.buffer, {
-              cacheControl: MEDIA_CACHE_CONTROL,
-              contentType: resolved.contentType || contentTypeFromFilename(data.fileName),
-            })
-            state.uploaded.add(remoteKey)
-          } catch (error) {
-            logger.thumbnail.error(`上传缩略图失败：${remoteKey}`, error)
-            return
-          }
-        }
-
-        let remoteUrl = state.urlCache.get(remoteKey)
-        if (!remoteUrl) {
-          try {
-            remoteUrl = await storageManager.generatePublicUrl(remoteKey)
-            state.urlCache.set(remoteKey, remoteUrl)
-          } catch (error) {
-            logger.thumbnail.error(`生成缩略图 URL 失败：${remoteKey}`, error)
-            return
-          }
-        }
-
-        payload.result.item.thumbnailUrl = remoteUrl
-
-        // 阅览器占位图（previews）：同一套上传逻辑，前缀单独一个目录
         const previewData = payload.context.pluginData[PREVIEW_PLUGIN_DATA_KEY] as ThumbnailPluginData | undefined
-        if (!previewData || !previewData.buffer) {
-          return
+
+        const [thumbResult, previewResult] = await Promise.all([
+          uploadMediaAsset({
+            storageManager,
+            state,
+            remoteKey,
+            data,
+            configuredContentType: resolved.contentType,
+            pools,
+            logger,
+            assetLabel: '缩略图',
+          }),
+          previewData?.buffer
+            ? uploadMediaAsset({
+                storageManager,
+                state,
+                remoteKey: joinSegments(resolved.previewPrefix, previewData.fileName),
+                data: previewData,
+                configuredContentType: resolved.contentType,
+                pools,
+                logger,
+                assetLabel: '占位图',
+              })
+            : Promise.resolve<{ url: string | null, failed: boolean, error?: unknown }>({ url: null, failed: false }),
+        ])
+
+        if (thumbResult.failed) {
+          recordUploadFailure(payload.result.item, 'thumbnail', thumbResult.error)
+        }
+        else if (thumbResult.url) {
+          payload.result.item.thumbnailUrl = thumbResult.url
         }
 
-        const previewKey = joinSegments(resolved.previewPrefix, previewData.fileName)
-
-        if (!state.uploaded.has(previewKey)) {
-          try {
-            await storageManager.uploadFile(previewKey, previewData.buffer, {
-              cacheControl: MEDIA_CACHE_CONTROL,
-              contentType: resolved.contentType || contentTypeFromFilename(previewData.fileName),
-            })
-            state.uploaded.add(previewKey)
-          } catch (error) {
-            logger.thumbnail.error(`上传占位图失败：${previewKey}`, error)
-            return
-          }
+        if (previewResult.failed) {
+          recordUploadFailure(payload.result.item, 'preview', previewResult.error)
         }
-
-        let previewUrl = state.urlCache.get(previewKey)
-        if (!previewUrl) {
-          try {
-            previewUrl = await storageManager.generatePublicUrl(previewKey)
-            state.urlCache.set(previewKey, previewUrl)
-          } catch (error) {
-            logger.thumbnail.error(`生成占位图 URL 失败：${previewKey}`, error)
-            return
-          }
+        else if (previewResult.url) {
+          payload.result.item.previewUrl = previewResult.url
         }
-
-        payload.result.item.previewUrl = previewUrl
       },
     },
   }

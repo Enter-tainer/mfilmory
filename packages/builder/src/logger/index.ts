@@ -28,6 +28,16 @@ export function setConsoleForwarding(enabled: boolean): void {
 
 export function relayLogMessage(tag: string, level: LogLevel | string, args: unknown[]): void {
   notifyListener(tag, level, args)
+  if (forwardToConsole) {
+    const tagged = consola.withTag(tag)
+    const method = (tagged as unknown as Record<string, unknown>)[level]
+    if (typeof method === 'function') {
+      ;(method as (...params: unknown[]) => void).apply(tagged, args)
+    }
+    else {
+      ;(tagged.info as (...params: unknown[]) => void)(...args)
+    }
+  }
 }
 
 function notifyListener(tag: string, level: LogLevel | string, args: unknown[]): void {
@@ -40,7 +50,7 @@ function notifyListener(tag: string, level: LogLevel | string, args: unknown[]):
 }
 
 function combineTags(parentTag: string, childTag: string): string {
-  if (!parentTag) return childTag
+  if (!parentTag) { return childTag }
   return `${parentTag}/${childTag}`
 }
 
@@ -68,8 +78,6 @@ function wrapInstance(instance: ConsolaInstance, tag: string): ConsolaInstance {
         if (forwardToConsole) {
           return Reflect.apply(value, target, args)
         }
-
-        return
       }
     },
   })

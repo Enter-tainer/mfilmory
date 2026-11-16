@@ -11,13 +11,67 @@ export interface LoadBuilderConfigOptions {
   configFile?: string
 }
 
+function normalizeIntSetting(
+  value: unknown,
+  min: number,
+  name: string,
+): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    consola.warn(`[config] system.processing.${name} 无效 (${String(value)})，将使用默认值`)
+    return undefined
+  }
+  const floored = Math.floor(value)
+  if (floored < min) {
+    if (min === 1 && value > 0) {
+      consola.warn(`[config] system.processing.${name}=${value} 小于 ${min}，已钳制为 ${min}`)
+      return min
+    }
+    consola.warn(`[config] system.processing.${name}=${value} 无效（需 >= ${min}），将使用默认值`)
+    return undefined
+  }
+  if (floored !== value) {
+    consola.warn(`[config] system.processing.${name}=${value} 非整数，已取整为 ${floored}`)
+  }
+  return floored
+}
+
 function applySystemOverrides(target: BuilderConfig['system'], overrides?: BuilderConfigInput['system']): void {
-  if (!overrides) return
+  if (!overrides) { return }
 
   if (overrides.processing) {
     const { processing } = overrides
-    if (typeof processing.defaultConcurrency === 'number') {
-      target.processing.defaultConcurrency = processing.defaultConcurrency
+    if (processing.cpuConcurrency === 'auto') {
+      target.processing.cpuConcurrency = 'auto'
+    }
+    else if (processing.cpuConcurrency !== undefined) {
+      const normalized = normalizeIntSetting(processing.cpuConcurrency, 1, 'cpuConcurrency')
+      if (normalized !== undefined) {
+        target.processing.cpuConcurrency = normalized
+      }
+    }
+    if (processing.sharpConcurrency === 'auto') {
+      target.processing.sharpConcurrency = 'auto'
+    }
+    else if (processing.sharpConcurrency !== undefined) {
+      const normalized = normalizeIntSetting(processing.sharpConcurrency, 1, 'sharpConcurrency')
+      if (normalized !== undefined) {
+        target.processing.sharpConcurrency = normalized
+      }
+    }
+    if (processing.cpuWorkerCount === 'auto') {
+      target.processing.cpuWorkerCount = 'auto'
+    }
+    else if (processing.cpuWorkerCount !== undefined) {
+      const normalized = normalizeIntSetting(processing.cpuWorkerCount, 0, 'cpuWorkerCount')
+      if (normalized !== undefined) {
+        target.processing.cpuWorkerCount = normalized
+      }
+    }
+    if (processing.networkConcurrency !== undefined) {
+      const normalized = normalizeIntSetting(processing.networkConcurrency, 1, 'networkConcurrency')
+      if (normalized !== undefined) {
+        target.processing.networkConcurrency = normalized
+      }
     }
     if (typeof processing.enableLivePhotoDetection === 'boolean') {
       target.processing.enableLivePhotoDetection = processing.enableLivePhotoDetection
@@ -53,12 +107,6 @@ function applySystemOverrides(target: BuilderConfig['system'], overrides?: Build
         ...observability.logging,
       }
     }
-    if (observability.performance?.worker) {
-      target.observability.performance.worker = {
-        ...target.observability.performance.worker,
-        ...observability.performance.worker,
-      }
-    }
   }
 }
 
@@ -72,7 +120,7 @@ function ensureUserSettings(target: BuilderConfig): UserBuilderSettings {
 }
 
 function applyUserOverrides(target: BuilderConfig, overrides?: BuilderConfigInput['user']): void {
-  if (!overrides) return
+  if (!overrides) { return }
   const user = ensureUserSettings(target)
 
   if (overrides.storage !== undefined) {

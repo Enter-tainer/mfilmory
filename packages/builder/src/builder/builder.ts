@@ -1,14 +1,18 @@
-import path from 'node:path'
 import process from 'node:process'
 
 import type { AfilmoryManifest, CameraInfo, LensInfo, PhotoManifestItem, ProcessPhotoResult } from '@afilmory/typing'
+import { Semaphore } from '@afilmory/utils'
 
+import { flushSignatures, setSignatureBatchMode } from '../image/asset-signature.js'
+import { shutdownExiftool } from '../image/exif.js'
 import { isMediaFormatCurrent, markMediaFormatCurrent } from '../image/media-format.js'
 import { previewExists } from '../image/preview.js'
 import { thumbnailExists } from '../image/thumbnail.js'
 import { logger } from '../logger/index.js'
 import { handleDeletedPhotos, loadExistingManifest, needsUpdate, saveManifest } from '../manifest/manager.js'
 import { CURRENT_MANIFEST_VERSION } from '../manifest/version.js'
+import type { BuilderRuntimePools } from '../photo/execution-context.js'
+import { computePhotoId, releasePluginDataBuffers } from '../photo/image-pipeline.js'
 import type { PhotoProcessorOptions } from '../photo/processor.js'
 import { processPhoto } from '../photo/processor.js'
 import type { PluginRunState } from '../plugins/manager.js'
@@ -22,9 +26,8 @@ import type { StorageProviderFactory, StorageProviderRegistrationOptions } from 
 import type { StorageConfig } from '../storage/index.js'
 import { StorageFactory, StorageManager } from '../storage/index.js'
 import type { BuilderConfig, UserBuilderSettings } from '../types/config.js'
-import { ClusterPool } from '../worker/cluster-pool.js'
-import type { TaskCompletedPayload } from '../worker/pool.js'
-import { WorkerPool } from '../worker/pool.js'
+import { CpuPool } from '../worker/cpu-pool.js'
+import { NetworkPool } from '../worker/network-pool.js'
 
 export interface BuilderOptions {
   isForceMode: boolean
@@ -34,6 +37,7 @@ export interface BuilderOptions {
   keyRegex?: string
   concurrencyLimit?: number // 可选，如果未提供则使用配置文件中的默认值
   progressListener?: BuildProgressListener
+  signal?: AbortSignal
 }
 
 export interface BuilderResult {
@@ -43,11 +47,13 @@ export interface BuilderResult {
   skippedCount: number
   deletedCount: number
   totalPhotos: number
+  /** 本次结束后仍有产物上传失败的照片数；这些照片下一次增量构建会自动重试。 */
+  uploadFailedCount: number
 }
 
 export interface BuildProgressStartPayload {
   total: number
-  mode: 'worker' | 'cluster'
+  mode: 'cpu-worker' | 'in-process'
   concurrency: number
 }
 
@@ -68,6 +74,16 @@ export interface BuildProgressListener {
   onError?: (error: unknown) => void
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return
+  }
+  const reason = signal.reason
+  throw reason instanceof Error
+    ? reason
+    : new Error(typeof reason === 'string' ? reason : '构建已取消')
+}
+
 export class AfilmoryBuilder {
   private storageManager: StorageManager | null = null
   private config: BuilderConfig
@@ -75,6 +91,7 @@ export class AfilmoryBuilder {
   private readonly pluginReferences: BuilderPluginConfigEntry[]
   /** dry-run 时置 false：插件照常加载（`onInit` 的排除前缀要生效），但钩子不执行。 */
   private pluginHooksEnabled = true
+  private runtimePools: BuilderRuntimePools | undefined = undefined
 
   constructor(config: BuilderConfig) {
     this.config = config
@@ -84,6 +101,10 @@ export class AfilmoryBuilder {
     this.pluginManager = new PluginManager(this.pluginReferences, {
       baseDir: process.cwd(),
     })
+  }
+
+  getRuntimePools(): BuilderRuntimePools | undefined {
+    return this.runtimePools
   }
 
   async buildManifest(options: BuilderOptions): Promise<BuilderResult> {
@@ -121,6 +142,8 @@ export class AfilmoryBuilder {
     let deletedCount = 0
 
     try {
+      throwIfAborted(options.signal)
+
       await this.emitPluginEvent(runState, 'beforeBuild', {
         options,
       })
@@ -154,6 +177,8 @@ export class AfilmoryBuilder {
         allObjects,
       })
 
+      throwIfAborted(options.signal)
+
       // 检测 Live Photo 配对（如果启用）
       const livePhotoMap = await this.detectLivePhotos(allObjects)
       if (this.config.system.processing.enableLivePhotoDetection) {
@@ -164,6 +189,8 @@ export class AfilmoryBuilder {
         options,
         livePhotoMap,
       })
+
+      throwIfAborted(options.signal)
 
       // 列出存储中的所有图片文件
       const listedImageObjects = await storageManager.listImages()
@@ -178,6 +205,8 @@ export class AfilmoryBuilder {
         imageObjects,
       })
 
+      throwIfAborted(options.signal)
+
       if (imageObjects.length === 0) {
         logger.main.error('❌ 没有找到需要处理的照片')
         const result: BuilderResult = {
@@ -187,6 +216,7 @@ export class AfilmoryBuilder {
           skippedCount: 0,
           deletedCount: 0,
           totalPhotos: 0,
+          uploadFailedCount: 0,
         }
 
         await this.emitPluginEvent(runState, 'afterBuild', {
@@ -201,8 +231,18 @@ export class AfilmoryBuilder {
       // 创建存储中存在的图片 key 集合，用于检测已删除的图片
       const s3ImageKeys = new Set(imageObjects.map(obj => obj.key))
 
+      throwIfAborted(options.signal)
+
+      // 媒体格式（宽度 / 质量 / 位深）变了就得整批重来，只算一次并同时传给 filterTaskImages 与 shouldProcessPhoto，
+      // 避免照片排进队列后又在 shouldProcessPhoto 因为旧缩略图存在而被判「无需处理」。
+      const mediaFormatStale
+        = !options.isForceMode && !options.isForceManifest && !(await isMediaFormatCurrent())
+      if (mediaFormatStale) {
+        logger.main.info('媒体格式版本已变化，本次构建会重新生成全部缩略图 / 占位图')
+      }
+
       // 筛选出实际需要处理的图片
-      let tasksToProcess = await this.filterTaskImages(imageObjects, existingManifestMap, options)
+      let tasksToProcess = await this.filterTaskImages(imageObjects, existingManifestMap, options, mediaFormatStale)
 
       // 为减少尾部长耗时，按文件大小降序处理（优先处理大文件）
       if (tasksToProcess.length > 1) {
@@ -229,214 +269,63 @@ export class AfilmoryBuilder {
         isForceThumbnails: options.isForceThumbnails,
         xmpKeywordsEnabled: xmpSettings.keywords,
         xmpRegionsEnabled: xmpSettings.regions,
+        dryRun: options.dryRun,
+        mediaFormatStale,
       }
 
-      const concurrency = options.concurrencyLimit ?? this.config.system.processing.defaultConcurrency
-      const { useClusterMode } = this.config.system.observability.performance.worker
-      const shouldUseCluster = useClusterMode && tasksToProcess.length >= concurrency * 2
-      const { progressListener } = options
+      const processing = this.config.system.processing
+      const effectiveCpuConcurrency
+        = typeof options.concurrencyLimit === 'number' && options.concurrencyLimit > 0
+          ? options.concurrencyLimit
+          : processing.cpuConcurrency
 
-      await this.emitPluginEvent(runState, 'beforeProcessTasks', {
-        options,
-        tasks: tasksToProcess,
-        processorOptions,
-        mode: shouldUseCluster ? 'cluster' : 'worker',
-        concurrency,
+      const cpuPool = new CpuPool({
+        cpuConcurrency: effectiveCpuConcurrency,
+        sharpConcurrency: processing.sharpConcurrency,
+        cpuWorkerCount: processing.cpuWorkerCount,
+        taskCount: tasksToProcess.length,
+        signal: options.signal,
       })
 
-      if (tasksToProcess.length === 0) {
-        logger.main.info('💡 没有需要处理的照片，使用现有 manifest')
-        for (const item of existingManifestItems) {
-          if (!s3ImageKeys.has(item.s3Key)) {
-            continue
-          }
+      const toPositiveInt = (value: unknown): number | undefined =>
+        typeof value === 'number' && Number.isFinite(value) && value > 0
+          ? Math.max(1, Math.floor(value))
+          : undefined
+      const storageDownload
+        = 'downloadConcurrency' in storageConfig ? toPositiveInt(storageConfig.downloadConcurrency) : undefined
+      const storageUpload
+        = 'uploadConcurrency' in storageConfig ? toPositiveInt(storageConfig.uploadConcurrency) : undefined
+      const networkPool = new NetworkPool({
+        downloadConcurrency: storageDownload ?? processing.networkConcurrency,
+        uploadConcurrency: storageUpload ?? processing.networkConcurrency,
+      })
 
-          const normalizedItem = this.normalizeManifestItem(item, xmpSettings)
+      const runtimePools: BuilderRuntimePools = { cpu: cpuPool, network: networkPool }
+      this.runtimePools = runtimePools
+      setSignatureBatchMode(true)
 
-          await this.emitPluginEvent(runState, 'beforeAddManifestItem', {
-            options,
-            item: normalizedItem,
-            pluginData: {},
-            resultType: 'skipped',
-          })
+      const { progressListener } = options
 
-          manifest.push(normalizedItem)
-        }
-      }
-      else {
-        const totalTasks = tasksToProcess.length
-        let completedTaskCount = 0
-
-        const applyResultCounters = (result: ProcessPhotoResult | null | undefined): void => {
-          if (!result) {
-            return
-          }
-
-          switch (result.type) {
-            case 'new': {
-              newCount++
-              processedCount++
-              break
-            }
-            case 'processed': {
-              processedCount++
-              break
-            }
-            case 'skipped': {
-              skippedCount++
-              break
-            }
-            case 'failed': {
-              failedCount++
-              break
-            }
-          }
-        }
-
-        const emitProgress = (currentKey?: string): void => {
-          progressListener?.onProgress?.({
-            total: totalTasks,
-            completed: completedTaskCount,
-            newCount,
-            processedCount,
-            skippedCount,
-            failedCount,
-            currentKey,
-          })
-        }
-
-        const handleTaskCompleted = ({
-          result,
-          taskIndex,
-          completed,
-        }: TaskCompletedPayload<ProcessPhotoResult>): void => {
-          if (result) {
-            applyResultCounters(result)
-          }
-
-          completedTaskCount = completed
-          const key = tasksToProcess[taskIndex]?.key
-          emitProgress(key)
-        }
-
-        progressListener?.onStart?.({
-          total: totalTasks,
-          mode: shouldUseCluster ? 'cluster' : 'worker',
-          concurrency,
-        })
-        emitProgress()
-
-        let results: ProcessPhotoResult[]
-
-        logger.main.info(
-          `开始${shouldUseCluster ? '多进程' : '并发'}处理任务，${shouldUseCluster ? '进程' : 'Worker'}数：${concurrency}${shouldUseCluster ? `，每进程并发：${this.config.system.observability.performance.worker.workerConcurrency}` : ''}`,
-        )
-
-        if (shouldUseCluster) {
-          const clusterPool = new ClusterPool<ProcessPhotoResult>({
-            concurrency,
-            totalTasks: tasksToProcess.length,
-            workerConcurrency: this.config.system.observability.performance.worker.workerConcurrency,
-            workerEnv: {
-              FORCE_MODE: processorOptions.isForceMode.toString(),
-              FORCE_MANIFEST: processorOptions.isForceManifest.toString(),
-              FORCE_THUMBNAILS: processorOptions.isForceThumbnails.toString(),
-              XMP_KEYWORDS: processorOptions.xmpKeywordsEnabled.toString(),
-              XMP_REGIONS: processorOptions.xmpRegionsEnabled.toString(),
-            },
-            sharedData: {
-              existingManifestMap,
-              livePhotoMap,
-              imageObjects: tasksToProcess,
-              builderConfig: this.getConfig(),
-            },
-            onTaskCompleted: handleTaskCompleted,
-          })
-
-          results = await clusterPool.execute()
-        }
-        else {
-          const workerPool = new WorkerPool<ProcessPhotoResult>({
-            concurrency,
-            totalTasks: tasksToProcess.length,
-            onTaskCompleted: handleTaskCompleted,
-          })
-
-          results = await workerPool.execute(async (taskIndex, workerId) => {
-            const obj = tasksToProcess[taskIndex]
-
-            const legacyObj = {
-              Key: obj.key,
-              Size: obj.size,
-              LastModified: obj.lastModified,
-              ETag: obj.etag,
-            }
-
-            const legacyLivePhotoMap = new Map()
-            for (const [key, value] of livePhotoMap) {
-              legacyLivePhotoMap.set(key, {
-                Key: value.key,
-                Size: value.size,
-                LastModified: value.lastModified,
-                ETag: value.etag,
-              })
-            }
-
-            return await processPhoto(
-              legacyObj,
-              taskIndex,
-              workerId,
-              tasksToProcess.length,
-              existingManifestMap,
-              legacyLivePhotoMap,
-              processorOptions,
-              this,
-              {
-                runState,
-                builderOptions: options,
-              },
-            )
-          })
-        }
-
-        processingResults.push(...results)
-
-        for (const result of results) {
-          if (!result.item) {
-            continue
-          }
-
-          const normalizedItem = this.normalizeManifestItem(result.item, xmpSettings)
-
-          await this.emitPluginEvent(runState, 'beforeAddManifestItem', {
-            options,
-            item: normalizedItem,
-            pluginData: result.pluginData ?? {},
-            resultType: result.type,
-          })
-
-          manifest.push(normalizedItem)
-        }
-
-        completedTaskCount = Math.max(completedTaskCount, totalTasks)
-        emitProgress()
-        progressListener?.onComplete?.({
-          total: totalTasks,
-          completed: completedTaskCount,
-          newCount,
-          processedCount,
-          skippedCount,
-          failedCount,
+      try {
+        await this.emitPluginEvent(runState, 'beforeProcessTasks', {
+          options,
+          tasks: tasksToProcess,
+          processorOptions,
+          mode: cpuPool.plan.mode,
+          concurrency: cpuPool.plan.cpuSlots,
         })
 
-        // 全部照片都处理成功才把「格式版本」落盘：中途失败或 --dry-run 时不写，
-        // 下次构建会继续按「版本不符」重新排队（幂等，最多多编一次）。
-        if (!options.dryRun && failedCount === 0) {
-          await markMediaFormatCurrent()
-        }
-
-        for (const [key, item] of existingManifestMap) {
-          if (s3ImageKeys.has(key) && !manifest.some(m => m.s3Key === key)) {
+        if (tasksToProcess.length === 0) {
+          progressListener?.onStart?.({
+            total: 0,
+            mode: cpuPool.plan.mode,
+            concurrency: cpuPool.plan.cpuSlots,
+          })
+          logger.main.info('💡 没有需要处理的照片，使用现有 manifest')
+          for (const item of existingManifestItems) {
+            if (!s3ImageKeys.has(item.s3Key)) {
+              continue
+            }
             const normalizedItem = this.normalizeManifestItem(item, xmpSettings)
 
             await this.emitPluginEvent(runState, 'beforeAddManifestItem', {
@@ -450,30 +339,271 @@ export class AfilmoryBuilder {
             skippedCount++
           }
         }
-      }
+        else {
+          const totalTasks = tasksToProcess.length
+          let completedTaskCount = 0
 
-      if (tasksToProcess.length === 0 && progressListener) {
-        progressListener.onComplete?.({
-          total: 0,
-          completed: 0,
-          newCount,
-          processedCount,
-          skippedCount,
-          failedCount,
+          const applyResultCounters = (result: ProcessPhotoResult | null | undefined): void => {
+            if (!result) {
+              return
+            }
+
+            switch (result.type) {
+              case 'new': {
+                newCount++
+                processedCount++
+                break
+              }
+              case 'processed': {
+                processedCount++
+                break
+              }
+              case 'skipped': {
+                skippedCount++
+                break
+              }
+              case 'failed': {
+                failedCount++
+                break
+              }
+            }
+          }
+
+          const emitProgress = (currentKey?: string): void => {
+            progressListener?.onProgress?.({
+              total: totalTasks,
+              completed: completedTaskCount,
+              newCount,
+              processedCount,
+              skippedCount,
+              failedCount,
+              currentKey,
+            })
+          }
+
+          progressListener?.onStart?.({
+            total: totalTasks,
+            mode: cpuPool.plan.mode,
+            concurrency: cpuPool.plan.cpuSlots,
+          })
+          emitProgress()
+
+          logger.main.info(
+            `开始处理任务：CPU 池=${cpuPool.plan.mode === 'cpu-worker' ? `子进程(${cpuPool.plan.workerCount}进程/${cpuPool.plan.cpuSlots}槽/sharp=${cpuPool.plan.sharpConcurrency})` : `同进程(${cpuPool.plan.cpuSlots}槽/sharp=${cpuPool.plan.sharpConcurrency})`}，网络池=↓${networkPool.downloadConcurrency}/↑${networkPool.uploadConcurrency}`,
+          )
+
+          throwIfAborted(options.signal)
+          await cpuPool.start()
+
+          const legacyLivePhotoMap = new Map<string, { Key: string, Size?: number, LastModified?: Date, ETag?: string }>()
+          for (const [key, value] of livePhotoMap) {
+            legacyLivePhotoMap.set(key, {
+              Key: value.key,
+              Size: value.size,
+              LastModified: value.lastModified,
+              ETag: value.etag,
+            })
+          }
+
+          // 两层有界门控：
+          // 1) pipelineWindowGate 约束全流程在途与待上传结果总量，防止慢上传导致内存无限膨胀；
+          // 2) stage1Gate 按 downloadConcurrency + cpuSlots + 4 开窗，既容许慢下载与 CPU 充分重叠，
+          //    又能在 Stage 1 完成后立刻释放（在 acquireStage2Gate 之前），避免慢上传反过来堵死下载/CPU。
+          const pipelineWindowGate = new Semaphore(
+            Math.max(
+              16,
+              cpuPool.plan.cpuSlots + networkPool.downloadConcurrency + Math.max(8, networkPool.uploadConcurrency * 3),
+            ),
+          )
+          const stage1Gate = new Semaphore(Math.max(4, cpuPool.plan.cpuSlots + networkPool.downloadConcurrency + 4))
+          const stage2Gate = new Semaphore(Math.max(4, networkPool.uploadConcurrency * 2))
+          const acquireStage2Gate = () => stage2Gate.acquire(options.signal)
+          let nextWorkerSeq = 0
+
+          const settledResults = await Promise.allSettled(
+            tasksToProcess.map(async (obj, taskIndex) => {
+              if (options.signal?.aborted) {
+                return null
+              }
+
+              let releaseWindow: (() => void) | undefined
+              let releaseStage1Raw: (() => void) | undefined
+              let stage1Released = false
+              const releaseStage1Gate = () => {
+                if (!stage1Released) {
+                  stage1Released = true
+                  releaseStage1Raw?.()
+                }
+              }
+
+              try {
+                releaseWindow = await pipelineWindowGate.acquire(options.signal)
+                releaseStage1Raw = await stage1Gate.acquire(options.signal)
+                if (options.signal?.aborted) {
+                  releaseStage1Gate()
+                  return null
+                }
+
+                const workerId = (nextWorkerSeq++ % Math.max(1, cpuPool.plan.cpuSlots)) + 1
+                const legacyObj = {
+                  Key: obj.key,
+                  Size: obj.size,
+                  LastModified: obj.lastModified,
+                  ETag: obj.etag,
+                }
+
+                const result = await processPhoto(
+                  legacyObj,
+                  taskIndex,
+                  workerId,
+                  totalTasks,
+                  existingManifestMap,
+                  legacyLivePhotoMap,
+                  processorOptions,
+                  this,
+                  {
+                    runState,
+                    builderOptions: options,
+                    pools: runtimePools,
+                    releaseStage1Gate,
+                    acquireStage2Gate,
+                  },
+                )
+                applyResultCounters(result)
+                completedTaskCount++
+                emitProgress(obj.key)
+                return result
+              }
+              catch (error) {
+                if (options.signal?.aborted) {
+                  return null
+                }
+                throw error
+              }
+              finally {
+                releaseStage1Gate()
+                releaseWindow?.()
+              }
+            }),
+          )
+
+          const firstRejected = settledResults.find(
+            (entry): entry is PromiseRejectedResult => entry.status === 'rejected',
+          )
+          if (firstRejected) {
+            throw firstRejected.reason
+          }
+
+          throwIfAborted(options.signal)
+
+          const manifestKeySet = new Set<string>()
+          for (const entry of settledResults) {
+            if (entry.status !== 'fulfilled' || !entry.value) {
+              continue
+            }
+
+            const result = entry.value
+            if (!result.item) {
+              if (result.pluginData) {
+                releasePluginDataBuffers(result.pluginData)
+              }
+              processingResults.push({
+                item: null,
+                type: result.type,
+              })
+              continue
+            }
+
+            const normalizedItem = this.normalizeManifestItem(result.item, xmpSettings)
+
+            await this.emitPluginEvent(runState, 'beforeAddManifestItem', {
+              options,
+              item: normalizedItem,
+              pluginData: result.pluginData ?? {},
+              resultType: result.type,
+            })
+
+            if (result.pluginData) {
+              releasePluginDataBuffers(result.pluginData)
+            }
+
+            processingResults.push({
+              item: normalizedItem,
+              type: result.type,
+            })
+            manifest.push(normalizedItem)
+            manifestKeySet.add(normalizedItem.s3Key)
+          }
+
+          for (const [key, item] of existingManifestMap) {
+            if (s3ImageKeys.has(key) && !manifestKeySet.has(key)) {
+              const normalizedItem = this.normalizeManifestItem(item, xmpSettings)
+
+              await this.emitPluginEvent(runState, 'beforeAddManifestItem', {
+                options,
+                item: normalizedItem,
+                pluginData: {},
+                resultType: 'skipped',
+              })
+
+              manifest.push(normalizedItem)
+              manifestKeySet.add(key)
+              skippedCount++
+            }
+          }
+
+          completedTaskCount = Math.max(completedTaskCount, totalTasks)
+          emitProgress()
+          progressListener?.onComplete?.({
+            total: totalTasks,
+            completed: completedTaskCount,
+            newCount,
+            processedCount,
+            skippedCount,
+            failedCount,
+          })
+        }
+
+        if (tasksToProcess.length === 0 && progressListener) {
+          progressListener.onComplete?.({
+            total: 0,
+            completed: 0,
+            newCount,
+            processedCount,
+            skippedCount,
+            failedCount,
+          })
+        }
+
+        throwIfAborted(options.signal)
+
+        // 全部照片都处理成功才把「格式版本」落盘：中途失败或 --dry-run 时不写，
+        // 下次构建会继续按「版本不符」重新排队（幂等，最多多编一次）。
+        if (!options.dryRun && failedCount === 0) {
+          await markMediaFormatCurrent()
+        }
+
+        await this.emitPluginEvent(runState, 'afterProcessTasks', {
+          options,
+          tasks: tasksToProcess,
+          results: processingResults,
+          manifest,
+          stats: {
+            newCount,
+            processedCount,
+            skippedCount,
+          },
         })
       }
+      finally {
+        this.runtimePools = undefined
+        await cpuPool.close()
+        await shutdownExiftool()
+        setSignatureBatchMode(false)
+        await flushSignatures()
+      }
 
-      await this.emitPluginEvent(runState, 'afterProcessTasks', {
-        options,
-        tasks: tasksToProcess,
-        results: processingResults,
-        manifest,
-        stats: {
-          newCount,
-          processedCount,
-          skippedCount,
-        },
-      })
+      throwIfAborted(options.signal)
 
       // 检测并处理已删除的图片
       if (!options.dryRun) {
@@ -525,6 +655,19 @@ export class AfilmoryBuilder {
       }
 
       const hasUpdates = newCount > 0 || processedCount > 0 || deletedCount > 0
+
+      const uploadFailedItems = manifest.filter(item => item.lastProcessSuccess === false)
+      const uploadFailedCount = uploadFailedItems.length
+      if (uploadFailedCount > 0) {
+        logger.main.warn(`⚠ ${uploadFailedCount} 张照片仍有产物上传失败；已写入 manifest，下一次增量构建会自动重试`)
+        for (const item of uploadFailedItems.slice(0, 20)) {
+          logger.main.warn(`  - ${item.id}: ${item.uploadFailures?.slice(-3).join('; ') ?? '未知错误'}`)
+        }
+        if (uploadFailedCount > 20) {
+          logger.main.warn(`  … 另有 ${uploadFailedCount - 20} 张，详见 manifest 的 uploadFailures`)
+        }
+      }
+
       const result: BuilderResult = {
         hasUpdates,
         newCount,
@@ -532,6 +675,7 @@ export class AfilmoryBuilder {
         skippedCount,
         deletedCount,
         totalPhotos: manifest.length,
+        uploadFailedCount,
       }
 
       await this.emitPluginEvent(runState, 'afterBuild', {
@@ -555,15 +699,15 @@ export class AfilmoryBuilder {
   private async loadExistingManifest(options: BuilderOptions): Promise<AfilmoryManifest> {
     return options.isForceMode || options.isForceManifest
       ? {
-        version: CURRENT_MANIFEST_VERSION,
-        data: [],
-        cameras: [],
-        lenses: [],
-      }
+          version: CURRENT_MANIFEST_VERSION,
+          data: [],
+          cameras: [],
+          lenses: [],
+        }
       : await loadExistingManifest({
-        allowWrite: !options.dryRun,
-        allowMigrate: !options.dryRun,
-      })
+          allowWrite: !options.dryRun,
+          allowMigrate: !options.dryRun,
+        })
   }
 
   private async detectLivePhotos(
@@ -777,6 +921,7 @@ export class AfilmoryBuilder {
     imageObjects: Awaited<ReturnType<StorageManager['listImages']>>,
     existingManifestMap: Map<string, PhotoManifestItem>,
     options: BuilderOptions,
+    mediaFormatStale: boolean,
   ): Promise<Awaited<ReturnType<StorageManager['listImages']>>> {
     // 强制模式下所有图片都需要处理
     if (options.isForceMode || options.isForceManifest) {
@@ -784,22 +929,27 @@ export class AfilmoryBuilder {
     }
 
     // 编码参数（宽度 / 质量 / 位深）变了就必须整体重来：产物文件名不含参数，
-    // 只看「文件在不在」会静默复用旧产物——历史上以为签名会触发重编码，
-    // 实际这一层先 stat 了文件就跳过了，日志还一切正常。
-    if (!(await isMediaFormatCurrent())) {
-      logger.main.info('媒体格式版本已变化，本次构建会重新生成全部缩略图 / 占位图')
+    // 只看「文件在不在」会静默复用旧产物。
+    if (mediaFormatStale) {
       return imageObjects
     }
 
     const tasksToProcess: Awaited<ReturnType<StorageManager['listImages']>> = []
+    const { digestSuffixLength } = this.config.system.processing
 
     for (const obj of imageObjects) {
       const { key } = obj
-      const photoId = path.basename(key, path.extname(key))
+      const photoId = computePhotoId(key, digestSuffixLength)
       const existingItem = existingManifestMap.get(key)
 
       // 新图片需要处理
       if (!existingItem) {
+        tasksToProcess.push(obj)
+        continue
+      }
+
+      // 上次有产物没上传成功：即使文件没变也要重试
+      if (existingItem.lastProcessSuccess === false || (existingItem.uploadFailures?.length ?? 0) > 0) {
         tasksToProcess.push(obj)
         continue
       }
@@ -819,7 +969,7 @@ export class AfilmoryBuilder {
 
       const needsXmpBackfill
         = !Array.isArray((existingItem as Partial<PhotoManifestItem>).keywords)
-        || !Array.isArray((existingItem as Partial<PhotoManifestItem>).regions)
+          || !Array.isArray((existingItem as Partial<PhotoManifestItem>).regions)
 
       if (needsXmpBackfill) {
         tasksToProcess.push(obj)
@@ -854,7 +1004,14 @@ export class AfilmoryBuilder {
       return imageObjects
     }
 
-    const pattern = new RegExp(keyRegex, 'i')
+    let pattern: RegExp
+    try {
+      pattern = new RegExp(keyRegex, 'i')
+    }
+    catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      throw new Error(`无效的 --key-regex 正则表达式 "${keyRegex}": ${detail}`)
+    }
 
     return imageObjects.filter(item => pattern.test(item.key))
   }
