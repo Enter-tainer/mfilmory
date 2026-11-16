@@ -14,6 +14,7 @@ import type { S3CompatibleConfig, StorageConfig } from '../../storage/interfaces
 import type { ThumbnailPluginData } from '../thumbnail-storage/shared.js'
 import { MEDIA_CACHE_CONTROL, PREVIEW_PLUGIN_DATA_KEY, THUMBNAIL_PLUGIN_DATA_KEY } from '../thumbnail-storage/shared.js'
 import type { BuilderPlugin } from '../types.js'
+import { recordUploadFailure } from '../upload-failure.js'
 import { PHOTO_OG_LAYOUT_VERSION, PHOTO_OG_WEBP_QUALITY, renderPhotoOgImage } from './photo-og.js'
 import type { CloudflareMiddlewareVendorConfig } from './vendors/cloudflare-moddleware.js'
 import { CloudflareMiddlewareVendor } from './vendors/cloudflare-moddleware.js'
@@ -48,9 +49,14 @@ interface ResolvedPluginConfig {
   enabled: boolean
 }
 
+interface UploadAttemptResult {
+  ok: boolean
+  error?: unknown
+}
+
 interface PluginRunState {
   uploaded: Set<string>
-  inflightUploads: Map<string, Promise<boolean>>
+  inflightUploads: Map<string, Promise<UploadAttemptResult>>
   urlCache: Map<string, string>
 }
 
@@ -97,7 +103,7 @@ function getOrCreateRunState(container: Map<string, unknown>): PluginRunState {
   if (!state) {
     state = {
       uploaded: new Set<string>(),
-      inflightUploads: new Map<string, Promise<boolean>>(),
+      inflightUploads: new Map<string, Promise<UploadAttemptResult>>(),
       urlCache: new Map<string, string>(),
     }
     container.set(RUN_STATE_KEY, state)
@@ -320,7 +326,9 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
         }
 
         try {
-          const webp = pools ? await pools.cpu.runOgRender(source) : await renderPhotoOgImage(source)
+          const webp = pools
+            ? await pools.cpu.runOgRender(source, payload.options.signal)
+            : await renderPhotoOgImage(source)
 
           const stateForUpload = state
           if (!stateForUpload.uploaded.has(remoteKey) || shouldForce || fileReplaced) {
@@ -332,15 +340,17 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
                   cacheControl: MEDIA_CACHE_CONTROL,
                   contentType,
                 })
-              uploadPromise = (async () => {
+              uploadPromise = (async (): Promise<UploadAttemptResult> => {
                 try {
-                  await (pools ? pools.network.upload(uploadOg) : uploadOg())
+                  await (pools ? pools.network.upload(uploadOg, payload.options.signal) : uploadOg())
                   stateForUpload.uploaded.add(remoteKey)
-                  return true
+                  return { ok: true }
                 }
                 catch (error) {
-                  logger.main.error(`OG image plugin: failed to upload ${remoteKey}`, error)
-                  return false
+                  if (!payload.options.signal?.aborted) {
+                    logger.main.error(`OG image plugin: failed to upload ${remoteKey}`, error)
+                  }
+                  return { ok: false, error }
                 }
                 finally {
                   stateForUpload.inflightUploads.delete(remoteKey)
@@ -349,8 +359,12 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
               stateForUpload.inflightUploads.set(remoteKey, uploadPromise)
             }
 
-            const uploadedOk = await uploadPromise
-            if (!uploadedOk) {
+            const uploadOutcome = await uploadPromise
+            if (!uploadOutcome.ok) {
+              if (payload.options.signal?.aborted) {
+                throw uploadOutcome.error
+              }
+              recordUploadFailure(item, 'og-image', uploadOutcome.error)
               return
             }
           }
@@ -371,7 +385,11 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
           item.ogImageUrl = remoteUrl
         }
         catch (error) {
+          if (payload.options.signal?.aborted) {
+            throw error
+          }
           logger.main.error(`OG image plugin: failed to render OG image for ${item.id}`, error)
+          recordUploadFailure(item, 'og-image', error)
         }
       },
       afterBuild: async ({ payload, logger }) => {

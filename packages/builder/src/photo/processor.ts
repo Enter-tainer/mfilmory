@@ -17,6 +17,10 @@ export interface PhotoProcessorOptions {
   xmpKeywordsEnabled: boolean
   xmpRegionsEnabled: boolean
   dryRun?: boolean
+  /**
+   * 媒体格式版本（宽度 / 质量 / 位深）已变化：所有照片都要重新生成缩略图 / 占位图。
+   */
+  mediaFormatStale?: boolean
 }
 
 // 处理单张照片

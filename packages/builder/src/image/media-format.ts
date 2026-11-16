@@ -3,7 +3,7 @@ import path from 'node:path'
 
 import { workdir } from '@afilmory/builder/path.js'
 
-import { PREVIEW_QUALITY } from './preview.js'
+import { PREVIEW_BITDEPTH, PREVIEW_QUALITY, PREVIEW_SIZE } from './preview.js'
 import { THUMBNAIL_BITDEPTH, THUMBNAIL_QUALITY, THUMBNAIL_WIDTH } from './thumbnail.js'
 
 /**
@@ -22,7 +22,7 @@ import { THUMBNAIL_BITDEPTH, THUMBNAIL_QUALITY, THUMBNAIL_WIDTH } from './thumbn
  */
 export const MEDIA_FORMAT_VERSION = [
   `thumb${THUMBNAIL_WIDTH}q${THUMBNAIL_QUALITY}b${THUMBNAIL_BITDEPTH}`,
-  `preview${PREVIEW_QUALITY}b${THUMBNAIL_BITDEPTH}`,
+  `preview${PREVIEW_SIZE}q${PREVIEW_QUALITY}b${PREVIEW_BITDEPTH}`,
 ].join('-')
 
 const MARKER_PATH = path.join(workdir, 'src/data/.cache/media-format-version')

@@ -2,10 +2,10 @@ import path from 'node:path'
 
 import { XMLParser } from 'fast-xml-parser'
 
-import { backoffDelay, sleep } from '../../../../utils/src/backoff.js'
 import { Semaphore } from '../../../../utils/src/semaphore.js'
 import { SUPPORTED_FORMATS } from '../../constants/index.js'
 import { logger } from '../../logger/index.js'
+import { isManagedByNetworkPool } from '../../worker/network-pool.js'
 import type {
   ProgressCallback,
   S3CompatibleConfig,
@@ -13,6 +13,12 @@ import type {
   StorageProvider,
   StorageUploadOptions,
 } from '../interfaces'
+import {
+  resolveRetryOptions,
+  StorageHttpError,
+  uploadAbortSignal,
+  withRetry,
+} from './retry.js'
 import { S3ProviderClient } from './s3-client.js'
 import { sanitizeS3Etag } from './s3-utils.js'
 
@@ -31,21 +37,10 @@ const pickStringField = (source: Record<string, unknown>, keys: string[]): strin
   return undefined
 }
 
-function isRetryableHttpStatus(status: number): boolean {
-  return status >= 500 || status === 429 || status === 408
-}
-
 function toSafePositiveInt(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? Math.max(1, Math.floor(value))
     : fallback
-}
-
-class NonRetryableS3Error extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'NonRetryableS3Error'
-  }
 }
 
 function formatS3ErrorBody(body?: string | null): string {
@@ -207,72 +202,80 @@ export class S3StorageProvider implements StorageProvider {
     }
   }
 
+  private async runWithLimiter<T>(limiter: Semaphore, fn: () => Promise<T>): Promise<T> {
+    if (isManagedByNetworkPool()) {
+      return await fn()
+    }
+    return await limiter.run(fn)
+  }
+
   async getFile(key: string): Promise<Buffer | null> {
-    return await this.limiter.run(async () => {
-      const maxAttempts = toSafePositiveInt(this.config.maxAttempts, 3)
-      const totalTimeoutMs = toSafePositiveInt(this.config.totalTimeoutMs, 60_000)
-      const idleTimeoutMs = toSafePositiveInt(this.config.idleTimeoutMs, 10_000)
+    const retry = resolveRetryOptions(this.config)
+    const totalTimeoutMs = toSafePositiveInt(this.config.totalTimeoutMs, 60_000)
+    const idleTimeoutMs = toSafePositiveInt(this.config.idleTimeoutMs, 10_000)
 
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        const startTime = Date.now()
-        const controller = new AbortController()
-        const totalTimer = setTimeout(() => controller.abort(), totalTimeoutMs)
+    try {
+      return await withRetry(
+        attempt =>
+          this.runWithLimiter(this.limiter, () =>
+            this.getFileOnce(key, attempt, retry.maxAttempts, totalTimeoutMs, idleTimeoutMs)),
+        {
+          ...retry,
+          label: `下载 ${key}`,
+          logger: logger.s3,
+        },
+      )
+    }
+    catch (error) {
+      logger.s3.error(`下载最终失败：${key}`, error)
+      return null
+    }
+  }
 
-        try {
-          logger.s3.info(`下载开始：${key} (attempt ${attempt}/${maxAttempts})`)
+  private async getFileOnce(
+    key: string,
+    attempt: number,
+    maxAttempts: number,
+    totalTimeoutMs: number,
+    idleTimeoutMs: number,
+  ): Promise<Buffer | null> {
+    const startTime = Date.now()
+    const controller = new AbortController()
+    const totalTimer = setTimeout(() => controller.abort(), totalTimeoutMs)
 
-          const response = await this.client.getObject(key, {
-            signal: controller.signal,
-          })
+    try {
+      logger.s3.info(`下载开始：${key} (attempt ${attempt}/${maxAttempts})`)
 
-          if (!response.ok || !response.body) {
-            if (response.status === 404) {
-              await response.body?.cancel().catch(() => {})
-              logger.s3.warn(`S3 对象不存在：${key} (status 404)`)
-              return null
-            }
+      const response = await this.client.getObject(key, {
+        signal: controller.signal,
+      })
 
-            const bodyText = await response.text().catch(() => '')
-            const message = `S3 响应异常：${key} (status ${response.status}) ${formatS3ErrorBody(bodyText)}`
-            if (isRetryableHttpStatus(response.status) || !response.body) {
-              throw new Error(message)
-            }
-            throw new NonRetryableS3Error(message)
-          }
-
-          const { buffer, firstByteAt } = await this.readStreamWithIdleTimeout(response, controller, idleTimeoutMs)
-
-          const duration = Date.now() - startTime
-          const ttfb = firstByteAt ? firstByteAt - startTime : duration
-          const sizeKB = Math.round(buffer.length / 1024)
-          logger.s3.success(`下载完成：${key} (${sizeKB}KB, ${duration}ms, TTFB ${ttfb}ms, attempt ${attempt})`)
-          return buffer
-        }
-        catch (error) {
-          const elapsed = Date.now() - startTime
-          if (error instanceof NonRetryableS3Error) {
-            logger.s3.error(`${error.message} (${elapsed}ms)`)
-            return null
-          }
-
-          logger.s3.warn(`下载失败：${key} (attempt ${attempt}/${maxAttempts}, ${elapsed}ms)`, error)
-          if (attempt < maxAttempts) {
-            clearTimeout(totalTimer)
-            const delay = backoffDelay(attempt)
-            logger.s3.info(`等待 ${delay}ms 后重试：${key}`)
-            await sleep(delay)
-            continue
-          }
-          logger.s3.error(`下载最终失败：${key}`)
+      if (!response.ok || !response.body) {
+        if (response.status === 404) {
+          await response.body?.cancel().catch(() => {})
+          logger.s3.warn(`S3 对象不存在：${key} (status 404)`)
           return null
         }
-        finally {
-          clearTimeout(totalTimer)
+
+        const bodyText = await response.text().catch(() => '')
+        const message = `S3 响应异常：${key} (status ${response.status}) ${formatS3ErrorBody(bodyText)}`
+        if (response.ok && !response.body) {
+          throw new Error(message)
         }
+        throw new StorageHttpError(response.status, message)
       }
 
-      return null
-    })
+      const { buffer, firstByteAt } = await this.readStreamWithIdleTimeout(response, controller, idleTimeoutMs)
+
+      const duration = Date.now() - startTime
+      const ttfb = firstByteAt ? firstByteAt - startTime : duration
+      const sizeKB = Math.round(buffer.length / 1024)
+      logger.s3.success(`下载完成：${key} (${sizeKB}KB, ${duration}ms, TTFB ${ttfb}ms, attempt ${attempt})`)
+      return buffer
+    }
+    finally {
+      clearTimeout(totalTimer)
+    }
   }
 
   async listImages(): Promise<StorageObject[]> {
@@ -391,34 +394,23 @@ export class S3StorageProvider implements StorageProvider {
     label: string,
     fn: (signal: AbortSignal) => Promise<T>,
   ): Promise<T> {
-    const maxAttempts = toSafePositiveInt(this.config.maxAttempts, 3)
+    const retry = resolveRetryOptions(this.config)
     const totalTimeoutMs = toSafePositiveInt(this.config.totalTimeoutMs, 60_000)
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    return await withRetry(async () => {
       const controller = new AbortController()
       const totalTimer = setTimeout(() => controller.abort(), totalTimeoutMs)
       try {
         return await fn(controller.signal)
       }
-      catch (error) {
-        if (error instanceof NonRetryableS3Error) {
-          throw error
-        }
-        if (attempt < maxAttempts) {
-          clearTimeout(totalTimer)
-          const delay = backoffDelay(attempt)
-          logger.s3.warn(`${label}重试 (attempt ${attempt}/${maxAttempts}, ${delay}ms)`, error)
-          await sleep(delay)
-          continue
-        }
-        throw error
-      }
       finally {
         clearTimeout(totalTimer)
       }
-    }
-
-    throw new Error(`${label}失败`)
+    }, {
+      ...retry,
+      label,
+      logger: logger.s3,
+    })
   }
 
   private async listPagedObjects(
@@ -436,11 +428,10 @@ export class S3StorageProvider implements StorageProvider {
       })
       const text = await response.text()
       if (!response.ok) {
-        const message = `列出 S3 对象失败 (status ${response.status}): ${formatS3ErrorBody(text)}`
-        if (isRetryableHttpStatus(response.status)) {
-          throw new Error(message)
-        }
-        throw new NonRetryableS3Error(message)
+        throw new StorageHttpError(
+          response.status,
+          `列出 S3 对象失败 (status ${response.status}): ${formatS3ErrorBody(text)}`,
+        )
       }
       const parsed = xmlParser.parse(text)
       const result = parsed?.ListBucketResult ?? {}
@@ -478,11 +469,10 @@ export class S3StorageProvider implements StorageProvider {
 
       if (!response.ok) {
         const text = await response.text().catch(() => '')
-        const message = `删除 S3 对象失败：${key} (status ${response.status}) ${formatS3ErrorBody(text)}`
-        if (isRetryableHttpStatus(response.status)) {
-          throw new Error(message)
-        }
-        throw new NonRetryableS3Error(message)
+        throw new StorageHttpError(
+          response.status,
+          `删除 S3 对象失败：${key} (status ${response.status}) ${formatS3ErrorBody(text)}`,
+        )
       }
 
       await response.body?.cancel().catch(() => {})
@@ -511,65 +501,59 @@ export class S3StorageProvider implements StorageProvider {
   }
 
   async uploadFile(key: string, data: Buffer, options?: StorageUploadOptions): Promise<StorageObject> {
-    return await this.uploadLimiter.run(async () => {
-      const headers: Record<string, string> = {
-        'content-type': options?.contentType ?? 'application/octet-stream',
-        'content-length': data.byteLength.toString(),
-      }
-      if (options?.cacheControl) {
-        headers['cache-control'] = options.cacheControl
-      }
+    const retry = resolveRetryOptions(this.config)
+    const uploadTimeoutMs = this.config.uploadTimeoutMs !== undefined
+      ? retry.uploadTimeoutMs
+      : toSafePositiveInt(this.config.totalTimeoutMs, 60_000)
 
-      const maxAttempts = toSafePositiveInt(this.config.maxAttempts, 3)
-      const totalTimeoutMs = toSafePositiveInt(this.config.totalTimeoutMs, 60_000)
+    return await withRetry(
+      () => this.runWithLimiter(this.uploadLimiter, () => this.putObjectOnce(key, data, options, uploadTimeoutMs)),
+      {
+        ...retry,
+        label: `上传 ${key}`,
+        logger: logger.s3,
+      },
+    )
+  }
 
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        const controller = new AbortController()
-        const totalTimer = setTimeout(() => controller.abort(), totalTimeoutMs)
+  private async putObjectOnce(
+    key: string,
+    data: Buffer,
+    options: StorageUploadOptions | undefined,
+    uploadTimeoutMs: number,
+  ): Promise<StorageObject> {
+    const headers: Record<string, string> = {
+      'content-type': options?.contentType ?? 'application/octet-stream',
+      'content-length': data.byteLength.toString(),
+    }
+    if (options?.cacheControl) {
+      headers['cache-control'] = options.cacheControl
+    }
 
-        try {
-          const response = await this.client.putObject(key, data as unknown as BodyInit, headers, {
-            signal: controller.signal,
-          })
+    const signal = uploadAbortSignal(uploadTimeoutMs)
+    const response = await this.client.putObject(
+      key,
+      data as unknown as BodyInit,
+      headers,
+      signal ? { signal } : undefined,
+    )
 
-          if (!response.ok) {
-            const text = await response.text().catch(() => '')
-            const message = `上传 S3 对象失败：${key} (status ${response.status}) ${formatS3ErrorBody(text)}`
-            if (isRetryableHttpStatus(response.status)) {
-              throw new Error(message)
-            }
-            throw new NonRetryableS3Error(message)
-          }
+    if (!response.ok) {
+      const text = await response.text().catch(() => '')
+      throw new StorageHttpError(
+        response.status,
+        `上传 S3 对象失败：${key} (status ${response.status}) ${formatS3ErrorBody(text)}`,
+      )
+    }
 
-          await response.body?.cancel().catch(() => {})
+    await response.body?.cancel().catch(() => {})
 
-          return {
-            key,
-            size: data.byteLength,
-            lastModified: new Date(),
-            etag: sanitizeS3Etag(response.headers.get('etag')),
-          }
-        }
-        catch (error) {
-          if (error instanceof NonRetryableS3Error) {
-            throw error
-          }
-          if (attempt < maxAttempts) {
-            clearTimeout(totalTimer)
-            const delay = backoffDelay(attempt)
-            logger.s3.warn(`上传重试：${key} (attempt ${attempt}/${maxAttempts}, ${delay}ms)`, error)
-            await sleep(delay)
-            continue
-          }
-          throw error
-        }
-        finally {
-          clearTimeout(totalTimer)
-        }
-      }
-
-      throw new Error(`上传 S3 对象失败：${key}`)
-    })
+    return {
+      key,
+      size: data.byteLength,
+      lastModified: new Date(),
+      etag: sanitizeS3Etag(response.headers.get('etag')),
+    }
   }
 
   async moveFile(sourceKey: string, targetKey: string, options?: StorageUploadOptions): Promise<StorageObject> {
@@ -609,10 +593,7 @@ export class S3StorageProvider implements StorageProvider {
         const message = error instanceof Error ? error.message : String(error)
         const statusMatch = /\(status (\d+)\)/.exec(message)
         if (statusMatch) {
-          const status = Number(statusMatch[1])
-          if (!isRetryableHttpStatus(status)) {
-            throw new NonRetryableS3Error(message)
-          }
+          throw new StorageHttpError(Number(statusMatch[1]), message)
         }
         throw error
       }

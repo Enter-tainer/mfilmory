@@ -3,6 +3,7 @@ import type { BuilderRuntimePools } from '../../photo/execution-context.js'
 import { StorageManager } from '../../storage/index.js'
 import type { S3CompatibleConfig, StorageConfig } from '../../storage/interfaces.js'
 import type { BuilderPlugin } from '../types.js'
+import { recordUploadFailure } from '../upload-failure.js'
 import type { ThumbnailPluginData } from './shared.js'
 import {
   contentTypeFromFilename,
@@ -36,9 +37,14 @@ interface ResolvedPluginConfig {
   enabled: boolean
 }
 
+interface UploadAttemptResult {
+  ok: boolean
+  error?: unknown
+}
+
 interface PluginRunState {
   uploaded: Set<string>
-  inflightUploads: Map<string, Promise<boolean>>
+  inflightUploads: Map<string, Promise<UploadAttemptResult>>
   urlCache: Map<string, string>
 }
 
@@ -88,7 +94,7 @@ function getOrCreateRunState(container: Map<string, unknown>): PluginRunState {
   if (!state) {
     state = {
       uploaded: new Set<string>(),
-      inflightUploads: new Map<string, Promise<boolean>>(),
+      inflightUploads: new Map<string, Promise<UploadAttemptResult>>(),
       urlCache: new Map<string, string>(),
     }
     container.set(RUN_STATE_KEY, state)
@@ -105,11 +111,11 @@ async function uploadMediaAsset(params: {
   pools?: BuilderRuntimePools
   logger: Logger
   assetLabel: '缩略图' | '占位图'
-}): Promise<string | null> {
+}): Promise<{ url: string | null, failed: boolean, error?: unknown }> {
   const { storageManager, state, remoteKey, data, configuredContentType, pools, logger, assetLabel } = params
   const buffer = data.buffer
   if (!buffer) {
-    return null
+    return { url: null, failed: false }
   }
 
   if (!state.uploaded.has(remoteKey)) {
@@ -120,15 +126,15 @@ async function uploadMediaAsset(params: {
           cacheControl: MEDIA_CACHE_CONTROL,
           contentType: configuredContentType || contentTypeFromFilename(data.fileName),
         })
-      uploadPromise = (async () => {
+      uploadPromise = (async (): Promise<UploadAttemptResult> => {
         try {
           await (pools ? pools.network.upload(doUpload) : doUpload())
           state.uploaded.add(remoteKey)
-          return true
+          return { ok: true }
         }
         catch (error) {
           logger.thumbnail.error(`上传${assetLabel}失败：${remoteKey}`, error)
-          return false
+          return { ok: false, error }
         }
         finally {
           state.inflightUploads.delete(remoteKey)
@@ -137,9 +143,9 @@ async function uploadMediaAsset(params: {
       state.inflightUploads.set(remoteKey, uploadPromise)
     }
 
-    const uploadedOk = await uploadPromise
-    if (!uploadedOk) {
-      return null
+    const outcome = await uploadPromise
+    if (!outcome.ok) {
+      return { url: null, failed: true, error: outcome.error }
     }
   }
 
@@ -151,11 +157,11 @@ async function uploadMediaAsset(params: {
     }
     catch (error) {
       logger.thumbnail.error(`生成${assetLabel} URL 失败：${remoteKey}`, error)
-      return null
+      return { url: null, failed: false }
     }
   }
 
-  return remoteUrl
+  return { url: remoteUrl, failed: false }
 }
 
 export default function thumbnailStoragePlugin(options: ThumbnailStoragePluginOptions = {}): BuilderPlugin {
@@ -243,7 +249,7 @@ export default function thumbnailStoragePlugin(options: ThumbnailStoragePluginOp
         const state = getOrCreateRunState(runShared)
         const previewData = payload.context.pluginData[PREVIEW_PLUGIN_DATA_KEY] as ThumbnailPluginData | undefined
 
-        const [remoteUrl, previewUrl] = await Promise.all([
+        const [thumbResult, previewResult] = await Promise.all([
           uploadMediaAsset({
             storageManager,
             state,
@@ -265,14 +271,21 @@ export default function thumbnailStoragePlugin(options: ThumbnailStoragePluginOp
                 logger,
                 assetLabel: '占位图',
               })
-            : Promise.resolve(null),
+            : Promise.resolve<{ url: string | null, failed: boolean, error?: unknown }>({ url: null, failed: false }),
         ])
 
-        if (remoteUrl) {
-          payload.result.item.thumbnailUrl = remoteUrl
+        if (thumbResult.failed) {
+          recordUploadFailure(payload.result.item, 'thumbnail', thumbResult.error)
         }
-        if (previewUrl) {
-          payload.result.item.previewUrl = previewUrl
+        else if (thumbResult.url) {
+          payload.result.item.thumbnailUrl = thumbResult.url
+        }
+
+        if (previewResult.failed) {
+          recordUploadFailure(payload.result.item, 'preview', previewResult.error)
+        }
+        else if (previewResult.url) {
+          payload.result.item.previewUrl = previewResult.url
         }
       },
     },

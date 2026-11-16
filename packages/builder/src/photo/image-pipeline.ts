@@ -224,12 +224,11 @@ export async function executePhotoProcessingPipeline(
   let reusableThumbBuffer: Buffer | null = null
   let reusableThumbHash = false
   if (!fileReplaced && !forceHardThumb && (await thumbnailExists(photoId))) {
-    const canReuseFromManifest
-      = !options.isForceMode && !options.isForceThumbnails && Boolean(existingItem?.thumbHash)
-    const canReuseFromSignature
-      = canReuseFromManifest || (await signatureMatches('thumbnail', photoId, THUMBNAIL_SIGNATURE))
-
-    if (canReuseFromSignature) {
+    // 产物文件名不含参数，必须严格校对 SIGNATURE（换位深/质量时不得被 old thumbHash 短路）
+    const sigMatchesThumb = await signatureMatches('thumbnail', photoId, THUMBNAIL_SIGNATURE)
+    if (sigMatchesThumb) {
+      const canReuseFromManifest
+        = !options.isForceMode && !options.isForceThumbnails && Boolean(existingItem?.thumbHash)
       try {
         reusableThumbBuffer = await fs.readFile(thumbnailPaths.thumbnailPath)
         reusableThumbHash = canReuseFromManifest
@@ -290,9 +289,10 @@ export async function executePhotoProcessingPipeline(
 
   if (needsOriginalFile && !rawBuffer) {
     const fetchOriginal = () => storageManager.getFile(photoKey)
+    const signal = runtime?.builderOptions.signal
     const cachedEntry = await getOriginalWithCacheEntry(
       photoKey,
-      () => (pools ? pools.network.download(fetchOriginal) : fetchOriginal()),
+      () => (pools ? pools.network.download(fetchOriginal, signal) : fetchOriginal()),
       {
         invalidate: fileReplaced,
         skipBuffer: pools?.cpu.plan.mode === 'cpu-worker',
@@ -325,7 +325,7 @@ export async function executePhotoProcessingPipeline(
           needPreview,
           needToneAnalysis,
         }
-        return pools ? pools.cpu.runPhotoTask(cpuInput) : runPhotoCpuTask(cpuInput)
+        return pools ? pools.cpu.runPhotoTask(cpuInput, runtime?.builderOptions.signal) : runPhotoCpuTask(cpuInput)
       })()
     : Promise.resolve({
         contentDigest: null,
@@ -368,9 +368,10 @@ export async function executePhotoProcessingPipeline(
   if (!needThumbnail && needBlurhash && !cpuResult.thumbHash) {
     if (!rawBuffer && !rawFilePath) {
       const fetchOriginal = () => storageManager.getFile(photoKey)
+      const signal = runtime?.builderOptions.signal
       const fallbackEntry = await getOriginalWithCacheEntry(
         photoKey,
-        () => (pools ? pools.network.download(fetchOriginal) : fetchOriginal()),
+        () => (pools ? pools.network.download(fetchOriginal, signal) : fetchOriginal()),
         {
           invalidate: fileReplaced,
           skipBuffer: pools?.cpu.plan.mode === 'cpu-worker',
@@ -397,7 +398,9 @@ export async function executePhotoProcessingPipeline(
         needPreview: false,
         needToneAnalysis: false,
       }
-      const fallbackResult = pools ? await pools.cpu.runPhotoTask(fallbackInput) : await runPhotoCpuTask(fallbackInput)
+      const fallbackResult = pools
+        ? await pools.cpu.runPhotoTask(fallbackInput, runtime?.builderOptions.signal)
+        : await runPhotoCpuTask(fallbackInput)
       cpuResult.thumbnailBuffer = fallbackResult.thumbnailBuffer
       cpuResult.thumbHash = fallbackResult.thumbHash
     }
@@ -620,8 +623,9 @@ export async function processPhotoWithPipeline(
     const { shouldProcess, reason } = await shouldProcessPhoto(photoId, existingItem, obj, options)
 
     if (!shouldProcess) {
-      const releaseStage2 = runtime.acquireStage2Gate ? await runtime.acquireStage2Gate() : undefined
+      // 先释放 Stage 1 再等 Stage 2，避免慢上传反过来把下载与 CPU 饿死
       releaseStage1()
+      const releaseStage2 = runtime.acquireStage2Gate ? await runtime.acquireStage2Gate() : undefined
       try {
         loggers.image.info(`⏭️ 跳过处理 (${reason}): ${photoKey}`)
         const result = {
@@ -657,9 +661,9 @@ export async function processPhotoWithPipeline(
 
     try {
       processedItem = await executePhotoProcessingPipeline(context, runtime)
+      releaseStage1()
       if (!processedItem) {
         resultType = 'failed'
-        releaseStage1()
         stage1ErrorEmitted = true
         await builder.emitPluginEvent(runtime.runState, 'photoProcessError', {
           options: runtime.builderOptions,
@@ -673,6 +677,9 @@ export async function processPhotoWithPipeline(
     }
     catch (error) {
       releaseStage1()
+      if (runtime.builderOptions.signal?.aborted) {
+        throw error
+      }
       stage1ErrorEmitted = true
       await builder.emitPluginEvent(runtime.runState, 'photoProcessError', {
         options: runtime.builderOptions,
@@ -700,6 +707,13 @@ export async function processPhotoWithPipeline(
         result,
       })
 
+      if (result.item && !runtime.builderOptions.dryRun) {
+        result.item.lastProcessSuccess = !result.item.uploadFailures?.length
+        if (result.item.lastProcessSuccess) {
+          delete result.item.uploadFailures
+        }
+      }
+
       return result
     }
     finally {
@@ -709,6 +723,9 @@ export async function processPhotoWithPipeline(
   }
   catch (error) {
     releaseStage1()
+    if (runtime?.builderOptions.signal?.aborted) {
+      throw error
+    }
     if (runtime && !stage1ErrorEmitted) {
       await builder
         .emitPluginEvent(runtime.runState, 'photoProcessError', {

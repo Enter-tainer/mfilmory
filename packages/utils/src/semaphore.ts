@@ -1,3 +1,12 @@
+function toAbortError(reason?: unknown): Error {
+  if (reason instanceof Error) {
+    return reason
+  }
+  const error = new Error(typeof reason === 'string' ? reason : 'Semaphore wait aborted')
+  error.name = 'AbortError'
+  return error
+}
+
 export class Semaphore {
   private permits: number
   private queue: Array<() => void> = []
@@ -17,17 +26,42 @@ export class Semaphore {
     }
   }
 
-  async acquire(): Promise<() => void> {
+  async acquire(signal?: AbortSignal): Promise<() => void> {
+    if (signal?.aborted) {
+      throw toAbortError(signal.reason)
+    }
+
     if (this.permits > 0) {
       this.permits--
       return this.createReleaser()
     }
 
-    return new Promise<() => void>((resolve) => {
-      this.queue.push(() => {
+    return new Promise<() => void>((resolve, reject) => {
+      let active = true
+      const onAbort = () => {
+        if (!active) {
+          return
+        }
+        active = false
+        const index = this.queue.indexOf(grant)
+        if (index !== -1) {
+          this.queue.splice(index, 1)
+        }
+        reject(toAbortError(signal?.reason))
+      }
+
+      const grant = () => {
+        if (!active) {
+          return
+        }
+        active = false
+        signal?.removeEventListener('abort', onAbort)
         this.permits--
         resolve(this.createReleaser())
-      })
+      }
+
+      this.queue.push(grant)
+      signal?.addEventListener('abort', onAbort, { once: true })
     })
   }
 
@@ -39,8 +73,8 @@ export class Semaphore {
     }
   }
 
-  async run<T>(fn: () => Promise<T>): Promise<T> {
-    const release = await this.acquire()
+  async run<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const release = await this.acquire(signal)
     try {
       return await fn()
     }

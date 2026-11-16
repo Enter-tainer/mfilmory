@@ -47,6 +47,8 @@ export interface BuilderResult {
   skippedCount: number
   deletedCount: number
   totalPhotos: number
+  /** 本次结束后仍有产物上传失败的照片数；这些照片下一次增量构建会自动重试。 */
+  uploadFailedCount: number
 }
 
 export interface BuildProgressStartPayload {
@@ -214,6 +216,7 @@ export class AfilmoryBuilder {
           skippedCount: 0,
           deletedCount: 0,
           totalPhotos: 0,
+          uploadFailedCount: 0,
         }
 
         await this.emitPluginEvent(runState, 'afterBuild', {
@@ -230,8 +233,16 @@ export class AfilmoryBuilder {
 
       throwIfAborted(options.signal)
 
+      // 媒体格式（宽度 / 质量 / 位深）变了就得整批重来，只算一次并同时传给 filterTaskImages 与 shouldProcessPhoto，
+      // 避免照片排进队列后又在 shouldProcessPhoto 因为旧缩略图存在而被判「无需处理」。
+      const mediaFormatStale
+        = !options.isForceMode && !options.isForceManifest && !(await isMediaFormatCurrent())
+      if (mediaFormatStale) {
+        logger.main.info('媒体格式版本已变化，本次构建会重新生成全部缩略图 / 占位图')
+      }
+
       // 筛选出实际需要处理的图片
-      let tasksToProcess = await this.filterTaskImages(imageObjects, existingManifestMap, options)
+      let tasksToProcess = await this.filterTaskImages(imageObjects, existingManifestMap, options, mediaFormatStale)
 
       // 为减少尾部长耗时，按文件大小降序处理（优先处理大文件）
       if (tasksToProcess.length > 1) {
@@ -259,6 +270,7 @@ export class AfilmoryBuilder {
         xmpKeywordsEnabled: xmpSettings.keywords,
         xmpRegionsEnabled: xmpSettings.regions,
         dryRun: options.dryRun,
+        mediaFormatStale,
       }
 
       const processing = this.config.system.processing
@@ -393,11 +405,19 @@ export class AfilmoryBuilder {
             })
           }
 
-          // Stage 1（下载 + EXIF + CPU 处理）超前 CPU 槽位 +4；进入 Stage 2（插件上传 / OG 渲染）前先取 stage2Gate，
-          // 确保慢上传时不会无限堆积已完成的缩略图/占位图大 Buffer。
-          const stage1Gate = new Semaphore(cpuPool.plan.cpuSlots + 4)
+          // 两层有界门控：
+          // 1) pipelineWindowGate 约束全流程在途与待上传结果总量，防止慢上传导致内存无限膨胀；
+          // 2) stage1Gate 按 downloadConcurrency + cpuSlots + 4 开窗，既容许慢下载与 CPU 充分重叠，
+          //    又能在 Stage 1 完成后立刻释放（在 acquireStage2Gate 之前），避免慢上传反过来堵死下载/CPU。
+          const pipelineWindowGate = new Semaphore(
+            Math.max(
+              16,
+              cpuPool.plan.cpuSlots + networkPool.downloadConcurrency + Math.max(8, networkPool.uploadConcurrency * 3),
+            ),
+          )
+          const stage1Gate = new Semaphore(Math.max(4, cpuPool.plan.cpuSlots + networkPool.downloadConcurrency + 4))
           const stage2Gate = new Semaphore(Math.max(4, networkPool.uploadConcurrency * 2))
-          const acquireStage2Gate = () => stage2Gate.acquire()
+          const acquireStage2Gate = () => stage2Gate.acquire(options.signal)
           let nextWorkerSeq = 0
 
           const settledResults = await Promise.allSettled(
@@ -406,29 +426,32 @@ export class AfilmoryBuilder {
                 return null
               }
 
-              const workerId = (nextWorkerSeq++ % Math.max(1, cpuPool.plan.cpuSlots)) + 1
-              const legacyObj = {
-                Key: obj.key,
-                Size: obj.size,
-                LastModified: obj.lastModified,
-                ETag: obj.etag,
-              }
-
-              const release = await stage1Gate.acquire()
-              if (options.signal?.aborted) {
-                release()
-                return null
-              }
-
-              let released = false
+              let releaseWindow: (() => void) | undefined
+              let releaseStage1Raw: (() => void) | undefined
+              let stage1Released = false
               const releaseStage1Gate = () => {
-                if (!released) {
-                  released = true
-                  release()
+                if (!stage1Released) {
+                  stage1Released = true
+                  releaseStage1Raw?.()
                 }
               }
 
               try {
+                releaseWindow = await pipelineWindowGate.acquire(options.signal)
+                releaseStage1Raw = await stage1Gate.acquire(options.signal)
+                if (options.signal?.aborted) {
+                  releaseStage1Gate()
+                  return null
+                }
+
+                const workerId = (nextWorkerSeq++ % Math.max(1, cpuPool.plan.cpuSlots)) + 1
+                const legacyObj = {
+                  Key: obj.key,
+                  Size: obj.size,
+                  LastModified: obj.lastModified,
+                  ETag: obj.etag,
+                }
+
                 const result = await processPhoto(
                   legacyObj,
                   taskIndex,
@@ -451,8 +474,15 @@ export class AfilmoryBuilder {
                 emitProgress(obj.key)
                 return result
               }
+              catch (error) {
+                if (options.signal?.aborted) {
+                  return null
+                }
+                throw error
+              }
               finally {
                 releaseStage1Gate()
+                releaseWindow?.()
               }
             }),
           )
@@ -625,6 +655,19 @@ export class AfilmoryBuilder {
       }
 
       const hasUpdates = newCount > 0 || processedCount > 0 || deletedCount > 0
+
+      const uploadFailedItems = manifest.filter(item => item.lastProcessSuccess === false)
+      const uploadFailedCount = uploadFailedItems.length
+      if (uploadFailedCount > 0) {
+        logger.main.warn(`⚠ ${uploadFailedCount} 张照片仍有产物上传失败；已写入 manifest，下一次增量构建会自动重试`)
+        for (const item of uploadFailedItems.slice(0, 20)) {
+          logger.main.warn(`  - ${item.id}: ${item.uploadFailures?.slice(-3).join('; ') ?? '未知错误'}`)
+        }
+        if (uploadFailedCount > 20) {
+          logger.main.warn(`  … 另有 ${uploadFailedCount - 20} 张，详见 manifest 的 uploadFailures`)
+        }
+      }
+
       const result: BuilderResult = {
         hasUpdates,
         newCount,
@@ -632,6 +675,7 @@ export class AfilmoryBuilder {
         skippedCount,
         deletedCount,
         totalPhotos: manifest.length,
+        uploadFailedCount,
       }
 
       await this.emitPluginEvent(runState, 'afterBuild', {
@@ -877,6 +921,7 @@ export class AfilmoryBuilder {
     imageObjects: Awaited<ReturnType<StorageManager['listImages']>>,
     existingManifestMap: Map<string, PhotoManifestItem>,
     options: BuilderOptions,
+    mediaFormatStale: boolean,
   ): Promise<Awaited<ReturnType<StorageManager['listImages']>>> {
     // 强制模式下所有图片都需要处理
     if (options.isForceMode || options.isForceManifest) {
@@ -884,10 +929,8 @@ export class AfilmoryBuilder {
     }
 
     // 编码参数（宽度 / 质量 / 位深）变了就必须整体重来：产物文件名不含参数，
-    // 只看「文件在不在」会静默复用旧产物——历史上以为签名会触发重编码，
-    // 实际这一层先 stat 了文件就跳过了，日志还一切正常。
-    if (!(await isMediaFormatCurrent())) {
-      logger.main.info('媒体格式版本已变化，本次构建会重新生成全部缩略图 / 占位图')
+    // 只看「文件在不在」会静默复用旧产物。
+    if (mediaFormatStale) {
       return imageObjects
     }
 
@@ -901,6 +944,12 @@ export class AfilmoryBuilder {
 
       // 新图片需要处理
       if (!existingItem) {
+        tasksToProcess.push(obj)
+        continue
+      }
+
+      // 上次有产物没上传成功：即使文件没变也要重试
+      if (existingItem.lastProcessSuccess === false || (existingItem.uploadFailures?.length ?? 0) > 0) {
         tasksToProcess.push(obj)
         continue
       }

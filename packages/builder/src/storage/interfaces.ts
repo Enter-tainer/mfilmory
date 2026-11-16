@@ -109,7 +109,24 @@ export interface StorageProvider {
   moveFile: (sourceKey: string, targetKey: string, options?: StorageUploadOptions) => Promise<StorageObject>
 }
 
-type BaseS3LikeConfig = {
+/**
+ * 下载/上传共用的重试与超时配置。
+ *
+ * `maxAttempts` 包含第一次尝试；只对瞬时错误（网络错误、408/425/429/5xx）重试，
+ * 4xx 配置/权限错误会直接抛出。`uploadTimeoutMs` 只作用于上传请求。
+ */
+export interface StorageRetryConfig {
+  /** 下载和上传的最大尝试次数（含第一次）。默认 3。 */
+  maxAttempts?: number
+  /** 指数退避的基准延迟。默认 300ms。 */
+  retryBaseDelayMs?: number
+  /** 指数退避的封顶延迟。默认 4000ms。 */
+  retryMaxDelayMs?: number
+  /** 单次上传请求的超时时间。默认 60000ms；`0` 表示不限制。 */
+  uploadTimeoutMs?: number
+}
+
+type BaseS3LikeConfig = StorageRetryConfig & {
   bucket?: string
   region?: string
   endpoint?: string
@@ -128,7 +145,6 @@ type BaseS3LikeConfig = {
   idleTimeoutMs?: number
   totalTimeoutMs?: number
   retryMode?: 'standard' | 'adaptive' | 'legacy'
-  maxAttempts?: number
   // Download / upload concurrency limiters within a single process
   downloadConcurrency?: number
   uploadConcurrency?: number
@@ -155,7 +171,7 @@ export type COSConfig = BaseS3LikeConfig & {
 
 export type S3CompatibleConfig = S3Config | OSSConfig | COSConfig
 
-export type B2Config = {
+export type B2Config = StorageRetryConfig & {
   provider: 'b2'
   applicationKeyId: string
   applicationKey: string
@@ -168,7 +184,7 @@ export type B2Config = {
   uploadUrlTtlMs?: number
 }
 
-export type GitHubConfig = {
+export type GitHubConfig = StorageRetryConfig & {
   provider: 'github'
   owner: string
   repo: string

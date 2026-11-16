@@ -28,7 +28,9 @@ export interface SystemProcessingSettings {
    */
   cpuWorkerCount: number | 'auto'
   /**
-   * 网络池并发上限（用于下载/上传限流；S3 存储仍优先读取 storage.downloadConcurrency / storage.uploadConcurrency）。
+   * 网络池并发上限（用于下载/上传限流）。
+   * 优先级：`storage.downloadConcurrency` / `storage.uploadConcurrency` 优先于此值；
+   * 构建期由 `NetworkPool` 统一单层限流，未配置 storage 并发时默认沿用此处配置。
    */
   networkConcurrency: number
   enableLivePhotoDetection: boolean

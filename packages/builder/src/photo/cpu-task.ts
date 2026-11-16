@@ -140,9 +140,8 @@ export async function runPhotoCpuTask(input: CpuPhotoTaskInput): Promise<CpuPhot
 
 export interface CpuOgRenderInput {
   buffer: Buffer
-  fit?: 'cover' | 'inside'
 }
 
 export async function runOgRenderTask(input: CpuOgRenderInput): Promise<Buffer> {
-  return await renderPhotoOgImage(input.buffer, { fit: input.fit })
+  return await renderPhotoOgImage(input.buffer)
 }

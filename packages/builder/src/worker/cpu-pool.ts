@@ -194,6 +194,7 @@ export class CpuPool {
   private readonly workers: WorkerSlot[] = []
   private readonly capacityWaiters: Array<{ resolve: () => void, reject: (error: Error) => void }> = []
   private readonly previousSharpConcurrency: number
+  private readonly previousSharpCache: { memory: number, files: number, items: number }
   private readonly execArgv: string[]
   private readonly signal?: AbortSignal
   private readonly onSignalAbort?: () => void
@@ -211,6 +212,12 @@ export class CpuPool {
     this.plan = resolveCpuPlan(config, this.workerScriptPath !== null)
     this.globalGate = new Semaphore(this.plan.cpuSlots)
     this.previousSharpConcurrency = sharp.concurrency()
+    const prevCache = sharp.cache()
+    this.previousSharpCache = {
+      memory: prevCache.memory.max,
+      files: prevCache.files.max,
+      items: prevCache.items.max,
+    }
     this.execArgv = filterChildExecArgv(process.execArgv)
     this.signal = config.signal
     this.aborted = Boolean(config.signal?.aborted)
@@ -530,10 +537,16 @@ export class CpuPool {
     }
   }
 
-  private async pickAvailableWorker(): Promise<WorkerSlot> {
+  private async pickAvailableWorker(signal?: AbortSignal): Promise<WorkerSlot> {
     while (true) {
       if (this.closed) {
         throw new Error('CpuPool has been closed')
+      }
+      if (signal?.aborted) {
+        const reason = signal.reason
+        throw reason instanceof Error
+          ? reason
+          : new Error(typeof reason === 'string' ? reason : 'CpuPool wait aborted')
       }
 
       const alive = this.workers.filter(w => w.ready && !w.exited && w.child.connected)
@@ -555,13 +568,52 @@ export class CpuPool {
       }
 
       await new Promise<void>((resolve, reject) => {
-        this.capacityWaiters.push({ resolve, reject })
+        let settled = false
+        const onAbort = () => {
+          if (settled) {
+            return
+          }
+          settled = true
+          const idx = this.capacityWaiters.indexOf(waiter)
+          if (idx !== -1) {
+            this.capacityWaiters.splice(idx, 1)
+          }
+          const reason = signal?.reason
+          reject(
+            reason instanceof Error
+              ? reason
+              : new Error(typeof reason === 'string' ? reason : 'CpuPool wait aborted'),
+          )
+        }
+        const waiter = {
+          resolve: () => {
+            if (settled) {
+              return
+            }
+            settled = true
+            signal?.removeEventListener('abort', onAbort)
+            resolve()
+          },
+          reject: (error: Error) => {
+            if (settled) {
+              return
+            }
+            settled = true
+            signal?.removeEventListener('abort', onAbort)
+            reject(error)
+          },
+        }
+        this.capacityWaiters.push(waiter)
+        signal?.addEventListener('abort', onAbort, { once: true })
       })
     }
   }
 
-  private async dispatch<T>(buildRequest: (id: number) => CpuWorkerRequest): Promise<T> {
-    const slot = await this.pickAvailableWorker()
+  private async dispatch<T>(
+    buildRequest: (id: number) => CpuWorkerRequest,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const slot = await this.pickAvailableWorker(signal)
     const id = this.nextRequestId++
     slot.activeTasks++
 
@@ -599,7 +651,7 @@ export class CpuPool {
     })
   }
 
-  async runPhotoTask(input: CpuPhotoTaskInput): Promise<CpuPhotoTaskOutput> {
+  async runPhotoTask(input: CpuPhotoTaskInput, signal?: AbortSignal): Promise<CpuPhotoTaskOutput> {
     if (this.closed) {
       throw new Error('CpuPool has been closed')
     }
@@ -607,6 +659,7 @@ export class CpuPool {
       await this.start()
     }
 
+    const effectiveSignal = signal ?? this.signal
     return await this.globalGate.run(async () => {
       if (this.closed) {
         throw new Error('CpuPool has been closed')
@@ -614,15 +667,18 @@ export class CpuPool {
       if (this.plan.mode === 'in-process') {
         return await runPhotoCpuTask(input)
       }
-      return await this.dispatch<CpuPhotoTaskOutput>(id => ({
-        type: 'photo',
-        id,
-        input,
-      }))
-    })
+      return await this.dispatch<CpuPhotoTaskOutput>(
+        id => ({
+          type: 'photo',
+          id,
+          input,
+        }),
+        effectiveSignal,
+      )
+    }, effectiveSignal)
   }
 
-  async runOgRender(buffer: Buffer, fit?: 'cover' | 'inside'): Promise<Buffer> {
+  async runOgRender(buffer: Buffer, signal?: AbortSignal): Promise<Buffer> {
     if (this.closed) {
       throw new Error('CpuPool has been closed')
     }
@@ -630,19 +686,23 @@ export class CpuPool {
       await this.start()
     }
 
+    const effectiveSignal = signal ?? this.signal
     return await this.globalGate.run(async () => {
       if (this.closed) {
         throw new Error('CpuPool has been closed')
       }
       if (this.plan.mode === 'in-process') {
-        return await runOgRenderTask({ buffer, fit })
+        return await runOgRenderTask({ buffer })
       }
-      return await this.dispatch<Buffer>(id => ({
-        type: 'og',
-        id,
-        input: { buffer, fit },
-      }))
-    })
+      return await this.dispatch<Buffer>(
+        id => ({
+          type: 'og',
+          id,
+          input: { buffer },
+        }),
+        effectiveSignal,
+      )
+    }, effectiveSignal)
   }
 
   async close(): Promise<void> {
@@ -664,7 +724,10 @@ export class CpuPool {
 
     try {
       if (this.plan.mode === 'in-process') {
-        sharp.concurrency(this.previousSharpConcurrency)
+        if (this.started) {
+          sharp.concurrency(this.previousSharpConcurrency)
+          sharp.cache(this.previousSharpCache)
+        }
         return
       }
 
