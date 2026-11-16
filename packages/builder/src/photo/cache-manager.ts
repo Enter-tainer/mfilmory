@@ -33,6 +33,13 @@ export async function shouldProcessPhoto(
     return { shouldProcess: true, reason: '新照片' }
   }
 
+  // 编码参数（宽度 / 质量 / 位深）变了：产物文件名不含参数，只看「文件在不在」会把旧图
+  // 当新图复用。builder 那边已经把照片整批排进队列了，但真正的入口是这里——不放行的话
+  // 照片会在开始处理前就被判成「无需处理」，构建标记却已写成新值，从此再也补不回来。
+  if (options.mediaFormatStale) {
+    return { shouldProcess: true, reason: '媒体格式版本已变化' }
+  }
+
   // 检查文件是否更新
   const fileNeedsUpdate = existingItem.lastModified !== obj.LastModified?.toISOString()
 

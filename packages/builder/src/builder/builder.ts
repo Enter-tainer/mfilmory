@@ -195,7 +195,17 @@ export class AfilmoryBuilder {
       const s3ImageKeys = new Set(imageObjects.map(obj => obj.key))
 
       // 筛选出实际需要处理的图片
-      let tasksToProcess = await this.filterTaskImages(imageObjects, existingManifestMap, options)
+      // 媒体格式（宽度 / 质量 / 位深）变了就得整批重来。这个结论只算一次，下面两层都要用：
+      // filterTaskImages() 决定把谁排进队列，shouldProcessPhoto() 决定开始处理前放不放行。
+      // 只做前者是没用的——照片进了队列也会在那里被判成「无需处理」，然后 marker 被写成新值，
+      // 从此再也补不回来（10-bit 上线时就撞上了这个）。
+      const mediaFormatStale
+        = !options.isForceMode && !options.isForceManifest && !(await isMediaFormatCurrent())
+      if (mediaFormatStale) {
+        logger.main.info('媒体格式版本已变化，本次构建会重新生成全部缩略图 / 占位图')
+      }
+
+      let tasksToProcess = await this.filterTaskImages(imageObjects, existingManifestMap, options, mediaFormatStale)
 
       // 为减少尾部长耗时，按文件大小降序处理（优先处理大文件）
       if (tasksToProcess.length > 1) {
@@ -222,6 +232,7 @@ export class AfilmoryBuilder {
         isForceThumbnails: options.isForceThumbnails,
         xmpKeywordsEnabled: xmpSettings.keywords,
         xmpRegionsEnabled: xmpSettings.regions,
+        mediaFormatStale,
       }
 
       const concurrency = options.concurrencyLimit ?? this.config.system.processing.defaultConcurrency
@@ -334,6 +345,7 @@ export class AfilmoryBuilder {
               FORCE_MODE: processorOptions.isForceMode.toString(),
               FORCE_MANIFEST: processorOptions.isForceManifest.toString(),
               FORCE_THUMBNAILS: processorOptions.isForceThumbnails.toString(),
+              MEDIA_FORMAT_STALE: mediaFormatStale.toString(),
               XMP_KEYWORDS: processorOptions.xmpKeywordsEnabled.toString(),
               XMP_REGIONS: processorOptions.xmpRegionsEnabled.toString(),
             },
@@ -765,6 +777,7 @@ export class AfilmoryBuilder {
     imageObjects: Awaited<ReturnType<StorageManager['listImages']>>,
     existingManifestMap: Map<string, PhotoManifestItem>,
     options: BuilderOptions,
+    mediaFormatStale: boolean,
   ): Promise<Awaited<ReturnType<StorageManager['listImages']>>> {
     // 强制模式下所有图片都需要处理
     if (options.isForceMode || options.isForceManifest) {
@@ -772,10 +785,8 @@ export class AfilmoryBuilder {
     }
 
     // 编码参数（宽度 / 质量 / 位深）变了就必须整体重来：产物文件名不含参数，
-    // 只看「文件在不在」会静默复用旧产物——历史上以为签名会触发重编码，
-    // 实际这一层先 stat 了文件就跳过了，日志还一切正常。
-    if (!(await isMediaFormatCurrent())) {
-      logger.main.info('媒体格式版本已变化，本次构建会重新生成全部缩略图 / 占位图')
+    // 只看「文件在不在」会静默复用旧产物。
+    if (mediaFormatStale) {
       return imageObjects
     }
 

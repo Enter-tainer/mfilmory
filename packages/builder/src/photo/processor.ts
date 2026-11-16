@@ -16,6 +16,13 @@ export interface PhotoProcessorOptions {
   xmpKeywordsEnabled: boolean
   xmpRegionsEnabled: boolean
   dryRun?: boolean
+  /**
+   * 媒体格式版本（宽度 / 质量 / 位深）已变化：所有照片都要重新生成缩略图 / 占位图。
+   *
+   * 必须一路传到 `shouldProcessPhoto()`：那一层才是真正的入口，只把照片排进队列
+   * 而不放行这一层，照片会在开始处理前被判成「无需处理」，marker 却已经被写上新值。
+   */
+  mediaFormatStale?: boolean
 }
 
 // 处理单张照片

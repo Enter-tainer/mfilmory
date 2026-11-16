@@ -126,6 +126,7 @@ export async function runAsWorker() {
         isForceMode: process.env.FORCE_MODE === 'true',
         isForceManifest: process.env.FORCE_MANIFEST === 'true',
         isForceThumbnails: process.env.FORCE_THUMBNAILS === 'true',
+        mediaFormatStale: process.env.MEDIA_FORMAT_STALE === 'true',
         xmpKeywordsEnabled: process.env.XMP_KEYWORDS === 'true',
         xmpRegionsEnabled: process.env.XMP_REGIONS === 'true',
       }
@@ -187,6 +188,7 @@ export async function runAsWorker() {
         isForceMode: process.env.FORCE_MODE === 'true',
         isForceManifest: process.env.FORCE_MANIFEST === 'true',
         isForceThumbnails: process.env.FORCE_THUMBNAILS === 'true',
+        mediaFormatStale: process.env.MEDIA_FORMAT_STALE === 'true',
         xmpKeywordsEnabled: process.env.XMP_KEYWORDS === 'true',
         xmpRegionsEnabled: process.env.XMP_REGIONS === 'true',
       }
