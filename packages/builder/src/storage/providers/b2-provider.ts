@@ -126,10 +126,6 @@ export class B2StorageProvider implements StorageProvider {
       throw new Error('B2StorageProvider: bucketId 不能为空')
     }
 
-    if (config.maxFileLimit !== undefined && config.maxFileLimit !== null && config.maxFileLimit <= 0) {
-      throw new Error('B2StorageProvider: maxFileLimit 必须大于 0')
-    }
-
     if (config.excludeRegex) {
       try {
         new RegExp(config.excludeRegex)
@@ -315,18 +311,12 @@ export class B2StorageProvider implements StorageProvider {
   private async fetchAllFiles(progressCallback?: ProgressCallback): Promise<StorageObject[]> {
     const objects: StorageObject[] = []
     let nextFileName: string | undefined
-    const maxLimit = this.config.maxFileLimit ?? Number.MAX_SAFE_INTEGER
 
     do {
-      if (objects.length >= maxLimit) {
-        break
-      }
-
-      const pageSize = Math.max(1, Math.min(MAX_PAGE_SIZE, maxLimit - objects.length))
       const response = await this.apiRequest<B2ListFileNamesResponse>('b2_list_file_names', {
         bucketId: this.config.bucketId,
         startFileName: nextFileName,
-        maxFileCount: pageSize,
+        maxFileCount: MAX_PAGE_SIZE,
         prefix: this.prefix || undefined,
       })
 
@@ -354,10 +344,6 @@ export class B2StorageProvider implements StorageProvider {
             currentPath: relativeKey,
             filesScanned: objects.length,
           })
-        }
-
-        if (objects.length >= maxLimit) {
-          break
         }
       }
 
@@ -493,7 +479,6 @@ export class B2StorageProvider implements StorageProvider {
   async listImages(): Promise<StorageObject[]> {
     const allFiles = await this.fetchAllFiles()
     return allFiles.filter((file) => {
-
       const ext = path.extname(file.key).toLowerCase()
       return SUPPORTED_FORMATS.has(ext)
     })
@@ -628,6 +613,3 @@ export class B2StorageProvider implements StorageProvider {
     return storageObject
   }
 }
-
-
-

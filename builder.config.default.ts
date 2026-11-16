@@ -19,7 +19,6 @@ export default defineBuilderConfig(() => ({
     prefix: env.S3_PREFIX,
     customDomain: env.S3_CUSTOM_DOMAIN,
     excludeRegex: env.S3_EXCLUDE_REGEX,
-    maxFileLimit: 1000,
     keepAlive: true,
     maxSockets: 64,
     connectionTimeoutMs: 5_000,
