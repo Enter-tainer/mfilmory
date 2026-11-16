@@ -73,6 +73,8 @@ export class AfilmoryBuilder {
   private config: BuilderConfig
   private pluginManager: PluginManager
   private readonly pluginReferences: BuilderPluginConfigEntry[]
+  /** dry-run 时置 false：插件照常加载（`onInit` 的排除前缀要生效），但钩子不执行。 */
+  private pluginHooksEnabled = true
 
   constructor(config: BuilderConfig) {
     this.config = config
@@ -86,9 +88,14 @@ export class AfilmoryBuilder {
 
   async buildManifest(options: BuilderOptions): Promise<BuilderResult> {
     try {
-      if (!options.dryRun) {
-        await this.ensurePluginsReady()
-      }
+      // 插件必须加载，--dry-run 也不例外：thumbnail-storage / og-image-storage 在
+      // `onInit` 里用 addExcludePrefix 注册 `.afilmory/...` 产物前缀。少了这一步，
+      // 列表会把 builder 自己的产物当成照片（实测 369 张会数成 1476 张），
+      // dry-run 报出来的数字就永远是假的。
+      await this.ensurePluginsReady()
+      // 但插件钩子在 dry-run 下不跑：它们会真的上传缩略图、同步远程仓库、写 manifest。
+      // 只想要 `onInit` 的副作用（排除前缀 / 存储提供商注册），不想要写入。
+      this.pluginHooksEnabled = !options.dryRun
       this.ensureStorageManager()
       return await this.#buildManifest(options)
     }
@@ -162,13 +169,6 @@ export class AfilmoryBuilder {
       const listedImageObjects = await storageManager.listImages()
       const imageObjects = this.filterImageObjectsByKey(listedImageObjects, options)
       logger.main.info(`存储中找到 ${listedImageObjects.length} 张照片`)
-      if (options.dryRun) {
-        // dry-run 不加载插件，而 thumbnail-storage / og-image-storage 正是在插件初始化时
-        // 用 addExcludePrefix 把 `.afilmory/thumbnails|previews|og-images` 排除掉的。
-        // 少了这一步，这里的照片数会把 builder 自己的产物也算进去（369 张会变成 1476 张），
-        // 跟真实构建差得很远——别拿这个数字判断「要处理多少张」。
-        logger.main.warn('dry-run 不加载插件：插件注册的产物排除前缀未生效，上面的照片数可能包含缩略图/占位图/OG 卡')
-      }
       if (imageObjects.length !== listedImageObjects.length) {
         logger.main.info(`调试筛选后剩余 ${imageObjects.length} 张照片`)
       }
@@ -665,6 +665,11 @@ export class AfilmoryBuilder {
     event: TEvent,
     payload: BuilderPluginEventPayloads[TEvent],
   ): Promise<void> {
+    // dry-run 只加载插件（为了 onInit 里的排除前缀），不执行钩子——
+    // 钩子会真的上传产物、同步仓库、写文件。
+    if (!this.pluginHooksEnabled) {
+      return
+    }
     await this.pluginManager.emit(this, runState, event, payload)
   }
 

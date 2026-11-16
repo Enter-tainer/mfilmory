@@ -34,10 +34,6 @@ export class LocalStorageProvider implements StorageProvider {
       throw new Error('LocalStorageProvider: basePath 不能为空')
     }
 
-    if (config.maxFileLimit && config.maxFileLimit <= 0) {
-      throw new Error('LocalStorageProvider: maxFileLimit 必须大于 0')
-    }
-
     if (config.excludeRegex) {
       try {
         new RegExp(config.excludeRegex)
@@ -122,12 +118,6 @@ export class LocalStorageProvider implements StorageProvider {
     }
 
     await this.scanDirectory(this.basePath, '', files, excludeRegex, progressCallback)
-
-    // 应用文件数量限制
-    if (this.config.maxFileLimit && files.length > this.config.maxFileLimit) {
-      logger.main.info(`文件数量超过限制 ${this.config.maxFileLimit}，截取前 ${this.config.maxFileLimit} 个文件`)
-      return files.slice(0, this.config.maxFileLimit)
-    }
 
     return files
   }
@@ -429,6 +419,3 @@ async function copyToDist(fromPath: string, distPath: string): Promise<void> {
     logger.main.error(`LocalStorageProvider: basePath: ${fromPath}, distPath: ${distPath}, 错误: ${error}`)
   }
 }
-
-
-

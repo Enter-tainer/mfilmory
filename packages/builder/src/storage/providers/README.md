@@ -250,7 +250,6 @@ const localConfig: StorageConfig = {
    */
   distPath: './apps/web/public/originals',
   excludeRegex: '\\.(tmp|cache)$', // 可选：排除文件的正则表达式
-  maxFileLimit: 1000, // 可选：最大文件数量限制
 }
 ```
 
@@ -313,7 +312,7 @@ photos/
 
 1. **权限管理**: 确保应用有读取照片目录的权限
 2. **路径安全**: 避免使用包含特殊字符的路径
-3. **性能优化**: 对于大量文件，考虑使用 `maxFileLimit` 限制
+3. **性能优化**: 文件很多时列表会翻页遍历全部对象，注意构建时间与内存占用
 4. **备份策略**: 定期备份重要照片文件
 5. **监控空间**: 监控磁盘空间使用情况
 
@@ -350,8 +349,7 @@ photos/
     "basePath": "/var/www/photos",
     "baseUrl": "https://yourdomain.com/photos",
     "distPath": "/var/www/site/public/photos",
-    "excludeRegex": "\\.(tmp|cache|DS_Store)$",
-    "maxFileLimit": 5000
+    "excludeRegex": "\\.(tmp|cache|DS_Store)$"
   }
 }
 ```

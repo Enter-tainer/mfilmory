@@ -1,4 +1,3 @@
-import { logger } from '../logger/index.js'
 import { StorageFactory } from './factory.js'
 import type {
   StorageConfig,
@@ -70,28 +69,17 @@ export class StorageManager {
   }
 
   /**
-   * 列出存储中的所有图片文件
-   * @returns 图片文件对象数组
+   * 列出存储中的所有图片文件。
+   *
+   * 两件事都在这里做，顺序固定：先由 provider 过滤格式（S3 顺带过滤 excludeRegex），
+   * 再由 `applyExcludes` 去掉插件注册的产物前缀（`.afilmory/thumbnails|previews|og-images`）。
+   *
+   * 这里**不做任何数量截断**。上限曾经存在（`maxFileLimit`），但它是在
+   * 「排除之前」按对象数生效的，而 S3 的字典序把 `.afilmory/` 排在最前——默认模板
+   * 的 1000 会先吃掉一整页产物，排除后剩下 0 张照片。桶里有多少照片就处理多少张。
    */
   async listImages(): Promise<StorageObject[]> {
-    const objects = await this.provider.listImages()
-    const excluded = this.applyExcludes(objects)
-
-    // 上限在**排除之后**按照片数施加。放在 provider 里会踩两个坑：
-    //  1. S3 字典序把 `.afilmory/` 排在最前，先截断再排除会把配额全给产物
-    //     （默认模板 maxFileLimit: 1000 时实测得到 0 张照片）；
-    //  2. `shouldPaginate = maxTotal > 1000` 让 1000 这个值根本不翻页，
-    //     第二页之后的照片被静默丢弃。
-    const limit = (this.currentConfig as { maxFileLimit?: number }).maxFileLimit
-    if (limit === undefined || limit === null || limit <= 0 || excluded.length <= limit) {
-      return excluded
-    }
-
-    logger.main.warn(
-      `照片数量 ${excluded.length} 超过 maxFileLimit=${limit}，只处理前 ${limit} 张。`
-      + ' 其余照片不会进入 manifest —— 请调大 maxFileLimit，或设为 0 表示不限制。',
-    )
-    return excluded.slice(0, limit)
+    return this.applyExcludes(await this.provider.listImages())
   }
 
   /**
@@ -243,6 +231,3 @@ export class StorageManager {
     this.currentConfig = config
   }
 }
-
-
-

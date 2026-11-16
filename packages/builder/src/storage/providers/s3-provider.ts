@@ -228,23 +228,16 @@ export class S3StorageProvider implements StorageProvider {
   async listImages(): Promise<StorageObject[]> {
     const excludeRegex = this.config.excludeRegex ? new RegExp(this.config.excludeRegex) : null
 
-    // 这里**不**应用 maxFileLimit：插件（thumbnail-storage / og-image-storage）
-    // 注册的排除前缀是在 StorageManager.applyExcludes 里生效的，而 S3 的字典序
-    // 把 `.afilmory/` 排在最前面。若在 provider 层先截断到 maxFileLimit 再排除，
-    // 默认模板的 1000 会取到一整页产物、排除后剩 0 张照片。
-    // 上限由 StorageManager.listImages() 在排除之后按「照片数」施加。
-    return await this.listAllMatching({
-      accept: (key) => {
-        if (excludeRegex && excludeRegex.test(key)) {
-          return false
-        }
-        return SUPPORTED_FORMATS.has(path.extname(key).toLowerCase())
-      },
+    return await this.listObjects(undefined, (key) => {
+      if (excludeRegex && excludeRegex.test(key)) {
+        return false
+      }
+      return SUPPORTED_FORMATS.has(path.extname(key).toLowerCase())
     })
   }
 
   async listAllFiles(_progressCallback?: ProgressCallback): Promise<StorageObject[]> {
-    // 清理 / 上传去重 / Live Photo 配对需要看到产物，所以这里只排除掉被删除标记之外的一切
+    // 同一个翻页逻辑，但不过滤格式：删除检测 / 上传去重 / Live Photo 配对需要看到全部对象
     return await this.listObjects()
   }
 
@@ -305,32 +298,23 @@ export class S3StorageProvider implements StorageProvider {
     return livePhotoMap
   }
 
-  /** `maxFileLimit`：0 / 负数 / 未配置都表示不限制。 */
-  private getMaxTotal(): number | undefined {
-    const limit = this.config.maxFileLimit
-    if (limit === undefined || limit === null || limit <= 0) {
-      return undefined
-    }
-    return limit
-  }
-
   /**
-   * 翻页遍历全部对象，只保留 `accept` 接受的那些（**不受 maxFileLimit 限制**）。
+   * 翻页遍历所有对象；`accept` 只做逐条过滤，不影响翻页。
    *
-   * 供 `listImages()` 使用：上限必须由 `StorageManager.listImages()` 在
-   * `applyExcludes`（插件注册的产物前缀）**之后**按「照片数」施加。否则 S3 字典序
-   * 里排在最前的 `.afilmory/` 产物会把整页配额吃光——默认模板 `maxFileLimit: 1000`
-   * 时实测会取到 1000 个产物、排除后剩 **0 张照片**。
+   * 这里**没有**数量上限。决定「处理多少张照片」的只能是「排除产物之后」的结果，
+   * 而产物前缀（`.afilmory/thumbnails|previews|og-images`）由插件注册在
+   * `StorageManager.applyExcludes` 里。任何施加在这一层的配额都会被字典序最前的
+   * `.afilmory/` 吃光——历史上 `maxFileLimit: 1000` 时因此拿到 0 张照片。
    */
-  private async listAllMatching(
-    options: { accept?: (key: string) => boolean } = {},
+  private async listObjects(
+    prefix?: string,
+    accept?: (key: string) => boolean,
   ): Promise<StorageObject[]> {
-    const { accept } = options
     const collected: StorageObject[] = []
     let continuationToken: string | null = null
 
     for (;;) {
-      const { objects, nextContinuationToken, isTruncated } = await this.listPagedObjects(undefined, continuationToken)
+      const { objects, nextContinuationToken, isTruncated } = await this.listPagedObjects(prefix, continuationToken)
 
       for (const obj of objects) {
         if (!obj.key) {
@@ -353,41 +337,11 @@ export class S3StorageProvider implements StorageProvider {
     return collected
   }
 
-  private async listObjects(prefix?: string): Promise<StorageObject[]> {
-    const maxTotal = this.getMaxTotal()
-    const all: StorageObject[] = []
-    let continuationToken: string | null = null
-
-    for (;;) {
-      const { objects, nextContinuationToken, isTruncated } = await this.listPagedObjects(prefix, continuationToken)
-      all.push(...objects)
-
-      const hasMore = isTruncated || Boolean(nextContinuationToken)
-      if (maxTotal && all.length >= maxTotal) {
-        if (hasMore) {
-          logger.main.warn(
-            `对象列表已达到 maxFileLimit=${maxTotal} 并被截断：桶里还有更多对象没有被列出。`
-            + ' 请调大 maxFileLimit，或设为 0 表示不限制。',
-          )
-        }
-        break
-      }
-
-      if (!hasMore || !nextContinuationToken) {
-        break
-      }
-
-      continuationToken = nextContinuationToken
-    }
-
-    return maxTotal ? all.slice(0, maxTotal) : all
-  }
-
   private async listPagedObjects(
     prefix?: string,
     continuationToken?: string | null,
   ): Promise<{ objects: StorageObject[]; nextContinuationToken: string | null; isTruncated: boolean }> {
-    // 每页固定 1000，上限由调用方按「过滤后的数量」控制
+    // 每页固定 1000，一直翻到 `isTruncated` / `nextContinuationToken` 耗尽
     const maxKeysPerRequest = 1000
     const response = await this.client.listObjects({
       prefix: prefix ?? this.config.prefix,
@@ -524,6 +478,3 @@ export class S3StorageProvider implements StorageProvider {
     return prefix.replaceAll('\\', '/').replaceAll(/^\/+|\/+$/g, '')
   }
 }
-
-
-

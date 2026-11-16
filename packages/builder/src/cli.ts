@@ -52,7 +52,7 @@ async function main() {
   --force              强制重新处理所有照片
   --force-manifest     强制重新生成 manifest
   --force-thumbnails   强制重新生成缩略图
-  --dry-run            只处理并打印结果，不写入 manifest/缩略图，也不执行插件副作用
+  --dry-run            跑完整流程但只打印结果：不写 manifest / 缩略图，也不执行插件钩子（插件照常加载）
   --key-regex=REGEX    仅处理 key 匹配指定正则的照片
   --config             显示当前配置信息
   --help, -h          显示帮助信息

@@ -119,7 +119,6 @@ type BaseS3LikeConfig = {
   prefix?: string
   customDomain?: string
   excludeRegex?: string
-  maxFileLimit?: number
   // Network tuning (optional)
   keepAlive?: boolean
   maxSockets?: number
@@ -164,7 +163,6 @@ export type B2Config = {
   prefix?: string
   customDomain?: string
   excludeRegex?: string
-  maxFileLimit?: number
   authorizationTtlMs?: number
   uploadUrlTtlMs?: number
 }
@@ -198,7 +196,6 @@ export type LocalConfig = {
    */
   distPath?: string
   excludeRegex?: string // 排除文件的正则表达式
-  maxFileLimit?: number // 最大文件数量限制
 }
 
 export type EagleRule =
