@@ -27,6 +27,7 @@ import { localesJsonPlugin } from './plugins/vite/locales-json'
 import { manifestInjectPlugin } from './plugins/vite/manifest-inject'
 import { ogImagePlugin } from './plugins/vite/og-image-plugin'
 import { photosStaticPlugin } from './plugins/vite/photos-static'
+import { prerenderGalleryPlugin } from './plugins/vite/prerender-gallery'
 import { siteConfigInjectPlugin } from './plugins/vite/site-config-inject'
 
 const devPrint = (): PluginOption => ({
@@ -69,6 +70,7 @@ const staticWebBuildPlugins: PluginOption[] = [
   manifestInjectPlugin(),
   inlineMainCssPlugin(),
   siteConfigInjectPlugin(),
+  prerenderGalleryPlugin(siteConfig),
   photosStaticPlugin(),
   // PWA service worker has been retired: it provided no offline capability (navigateFallback was
   // disabled and index.html was never precached) while its workbox precache could permanently poison

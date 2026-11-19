@@ -100,6 +100,7 @@ viewport 是 1258×566，脚本会设成 1440×900 并把实测值写进 `.viewp
 | `check-plugins-typecheck.mjs` | 临时把 `apps/web/plugins` 纳入 type-check 跑一遍 —— `tsconfig.json` 默认不含它，插件里的类型错误只有 CI/构建才可能发现。 |
 | `check-block-comments.mjs` | 扫「块注释里出现 `*/`」的情况。典型踩法：在 `/** … */` 里写 glob 如 `plugins/**/*`，其中的 `*/` 会提前闭合注释，后面一串中文被当代码解析，报一堆 TS1005/TS1109。 |
 | `check-inline-css.mjs` | 主 CSS 内联的**差分**断言（详见下一节）。 |
+| `measure-vitals.mjs` | 无节流与弱网 JS 延迟下的 Web Vitals（FCP / LCP / CLS / TBT）对比 + `#ssg-shell` / `#root` 像素一致性验证。 |
 | `make-broken-dist.mjs` | 造一份「故意砍掉 location + 16 个 exif 字段」的产物，验证 `probe-manifest-fields.mjs` 真的有牙（它必须失败）。 |
 
 ## 已知的测量陷阱（都踩过）

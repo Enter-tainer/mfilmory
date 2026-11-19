@@ -354,3 +354,61 @@ hover/focus 某张照片时才 `import()` viewer 路由（190 KB br），`window
 - `probe-manifest-fields.mjs` 5/5 通过。
 - `verify-routes.ps1` + `diff-routes.mjs`（5 路由）：`deeplink`、`filter-camera`、`manifest-page`、`map`（340 GPS 地点）硬判据全通过，非 `/manifest` 路由 0 JS/资源错误、0 破图；`/` 上 `imgCount` 67→67、`renderedIds` 34→34（100% 重合）、`textLen` 1483→1483、33/33 照片文本片段集合逐字符一致，仅底部相邻两张（`MGT06415` / `MGT06601`）因 `masonic` interval-tree DOM 挂载顺序置换，已在未改动 `main` 基线上复测确认 `main` 自身即在两个完全相同的顺序间交替出现。
 - 4 项交互懒加载测试（`127.0.0.1:4822`）：动态语言切换（中文↔日本語↔English）、Cmd-K 触发懒加载 `ModalContainer` 自定义日期弹窗、移动端 390×844 触发懒加载 `MobileViewDrawer`、`/photos/:id` 右键触发懒加载 `ContextMenu`（`复制图像下载图像`）+ 分享复制触发 `DeferredToaster`（`[data-sonner-toast]`），均 0 JS 错误。
+
+---
+
+# 第四轮：首屏静态画廊壳预渲染与零闪烁 React 交接（2026-11-20）
+
+## 设计选择：为什么采用「视口同步计算静态壳 + 无缝交接」而非整棵树 `hydrateRoot`
+
+1. **响应式瀑布流坐标依赖客户端真实视口宽度**：画廊采用 JS 绝对定位瀑布流（`MasonryView` + `masonic` `usePositioner` 按 `window.innerWidth` 动态计算 2–8 列及每列宽度/坐标），服务端并不知道访客是 390 px 手机还是 1440 px 桌面，强行 SSR 单份 DOM 再 `hydrateRoot` 必然触发 column/layout mismatch 并整页重排（正是最初产生高 CLS 的原因）。
+2. **Cloudflare Pages 静态单页架构**：站点共用同一份 `index.html` SPA fallback（`/`、`/map`、`/photos/:id`、`/?cameras=...`），加上语言探测（`i18next` 异步加载 locale）和设备宽度分支（`useMobile`），全树 SSR 水合在多路由与多视口下极易水合失配；而 `masonic` 的 `didEverMount` 机制在 `hydrate()` 之后本身也会重新挂载整棵网格。
+3. **本方案解法**：构建期仅把前 36 张缩略图轻量元组（公共路径前缀去重 + 精确 `aspectRatio` + `thumbhash` 平均色十六进制）与零 Tailwind 增量的静态 `<header>` 写入 `index.html` 的 `#ssg-shell` 占位层；浏览器收到 HTML 后、**在下载并执行任意 JS / `photos-manifest.*.json` 之前**，同步内联脚本 `<script id="ssg-init">` 按真实 `window.innerWidth`/`innerHeight` 用完全一致的 `MasonryView` + `masonic` 算法毫秒级排出首屏卡片，并只对前 4 张及预测 LCP 卡片设 `loading="eager" fetchpriority="high"`（其余首屏卡片 `loading="lazy"` 以避免多列宽屏下抢占 LCP 带宽）；非 `/` 路由与带查询参数页则在首帧前同步移除 `#ssg-shell`，不闪屏也不多发图片请求。待底层 `#root` 的 React Masonry 完成视口覆盖且关键图片完成解码后，无缝迁移滚动位置、撤掉 `#ssg-shell` 并重放用户在 JS 到达前的早期点击（照片 / 搜索 / 地图）。
+
+## 实测结果
+
+### 1. 关键路径字节（`scripts/perf/bytes-accounting.mjs`，br11，同源配置 + 369 张照片 manifest）
+
+| 指标 | 优化前（`main` / Round 3） | 优化后（Round 4） | Δ |
+|---|---:|---:|---:|
+| `html` | 26,537 B | 28,670 B | +2,133 B |
+| `inlineCss` | 24,968 B | 24,913 B | −55 B |
+| `js`（entry + modulepreload） | 195,526 B | 196,090 B | +564 B |
+| `manifest` | 48,765 B | 48,765 B | 0 B |
+| **关键路径总计（TOTAL）** | **270,828 B** | **273,525 B** | **+2,697 B（+1.00%）** |
+
+- 仅以 **`+2,697 B`（+1.00%）** 的关键路径字节增量（其中删除了 `#splash-screen` 的动画样式表，主 Tailwind CSS 与 `INLINE_MAIN_CSS=0` 参照产物仍为 **215,060 B 逐字节一致**），换取不依赖 JS/manifest 的完整首屏可绘内容与无 JS 降级可用性（含 `<noscript>` 前 12 张画廊网格兜底）。
+
+### 2. Web Vitals 对照与像素一致性（`scripts/perf/measure-vitals.mjs`，各 3 次冷启动中位数）
+
+| 场景 & 视口 | 指标 | `main`（Round 3） | `opt`（Round 4） | 变化 / LCP 来源 |
+|---|---|---:|---:|---|
+| 无节流 · 桌面 `1440×900` | FCP / LCP / CLS / TBT | 172 ms / 1,760 ms / 0 / 58 ms | 240 ms / **1,292 ms** / **0** / **45 ms** | LCP **−26.6%**（`root`） |
+| 无节流 · 手机 `390×844` | FCP / LCP / CLS / TBT | 144 ms / 1,588 ms / 0.00123 / 19 ms | 228 ms / **1,408 ms** / 0.00702 / **13 ms** | LCP **−11.3%**（`root`） |
+| **弱网 JS 延迟 2500 ms · 桌面 `1440×900`** | **FCP / LCP / CLS / TBT** | 180 ms / 8,172 ms / **0** / 77 ms | **160 ms** / **1,152 ms** / **0** / **61 ms** | **LCP −85.9%（锁定在 `#ssg-shell`）** |
+| **弱网 JS 延迟 2500 ms · 手机 `390×844`** | **FCP / LCP / CLS / TBT** | 212 ms / 8,088 ms / 0.00123 / 31 ms | **136 ms** / **1,104 ms** / **0.00123** / **16 ms** | **LCP −86.4%（锁定在 `#ssg-shell`）** |
+
+- **像素一致性实测（`#ssg-shell` 卡片 vs 交接后 React `#root [data-viewer-transition-id]`）**：
+  - 桌面 `1440×900`：**`24 / 24` 匹配，`maxDx = 0 px`、`maxDy = 0 px`、`maxDw = 0 px`、`maxDh = 0 px`**。
+  - 手机 `390×844`：**`12 / 12` 匹配，`maxDx = 0 px`、`maxDy = 0 px`、`maxDw = 0 px`、`maxDh = 0 px`**。
+  - （注：移动端 `0.00123` 的微量 CLS 在 `main` 基线同样存在，由 `#root` 挂载后头象 `AvatarPrimitive.Image` 从 fallback 切换导致，静态壳交接本身不产生额外位移。）
+
+## 改了什么
+
+1. **`apps/web/index.html`**：在 `#root`（保留 `#splash-screen` 给 dev / CI / `PRERENDER_SHELL=0` 兜底）后增加 `<div id="ssg-slot"></div>` 占位。
+2. **`apps/web/plugins/vite/prerender-gallery.ts` + `apps/web/vite.config.ts`**：新增构建期预渲染插件（支持 `PRERENDER_SHELL=0` 或空 manifest 安全降级），生成纯已有 utility 类构成的静态 `<header>`、36 张轻量数据元组、`#ssg-init` 同步视口排版脚本（含非 `/` 路由首帧移除守卫、早期点击队列收集）以及 `<noscript>` 网格兜底，并移除冗余 `#splash-screen`。
+3. **`apps/web/src/lib/ssg-handoff.ts`**：实现幂等的 `dismissSsgShell`（滚动位置迁移 + 对 `#root` 已定位可见缩略图等待解码 `Promise.race(..., 150ms)` + `rAF` 撤除 `#ssg-shell`/`#ssg-style`）与 `replaySsgPendingAction`（重放点击照片 / 搜索 / 地图意图）。
+4. **`PhotosRoot.tsx` / `App.tsx` / `main.tsx`**：在 Masonry 渲染覆盖视口、列表/筛选/空状态、非 `/` 路由及 `2000 ms` 兜底定时器四处接入交接与动作重放。
+5. **`scripts/perf/measure-vitals.mjs`**：新增 Chromium 冷启动 Web Vitals（无节流 + 可配弱网 JS 延迟代理）与 `#ssg-shell` / `#root` 像素一致性自动验证脚本。
+
+## 验证摘要
+
+- `pnpm --filter @afilmory/web exec vite build`、`pnpm type-check`（含 `apps/web/plugins/**/*`）、7 个变更/新增文件定向 `eslint`（0 error）、`check-block-comments.mjs`（385 文件 0 处违规）全通过。
+- `assert-manifest-fields.mjs`（369 照片 / 9,236 字段 / 14,919 exif 子字段完全一致）、`check-inline-css.mjs`（`215,060 B` 主 CSS 逐字节一致且无悬空引用）通过。
+- `measure-vitals.mjs` 桌面与移动端双视口像素误差均为 `0 px`，弱网 JS 延迟下 LCP 由 ~8.1 s 降至 **1.10–1.15 s** 且 `lcpSource` 稳定在 `ssg-shell`。
+- 静态壳专项测试（`127.0.0.1:4832`）：
+  - **无 JS（拦截 `**/assets/*.js`）**：桌面（24 张）/ 手机（12 张）均完整渲染静态顶栏（`现在开始拍！` + `369`）与定位照片网格；
+  - **提前点击交接（2,000 ms JS 延迟）**：在 JS 到来前点击第一张照片 `20261104-LKXG5370`，JS 就绪后自动撤壳并进入 `/photos/20261104-LKXG5370` 查看器；
+  - **非首页守卫（拦截 JS）**：`/?cameras=SONY%20ILCE-7RM5`、`/photos/20261104-LKXG5370`、`/map`、`/manifest` 首帧均无 `#ssg-shell` / `#ssg-style`；
+  - **交接后状态**：`/` 交接后 `#root` 网格正常挂载悬浮 EXIF/标题层。
+- `probe-manifest-fields.mjs` 5/5 通过；`verify-routes.ps1` + `diff-routes.mjs`（5 路由对比 Round 3 `main` 基线）硬性判据全部通过，所有路由 `error=0`、`broken=0`、`pending=0`，`/` 与 `/manifest` 文本逐字符一致、`/map` 340 GPS 拍摄位置完整出现。

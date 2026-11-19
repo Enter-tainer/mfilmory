@@ -7,6 +7,7 @@ import { RouterProvider } from 'react-router/dom'
 
 import { AppSkeleton } from './components/ui/app-skeleton'
 import { i18nReady } from './i18n'
+import { dismissSsgShell } from './lib/ssg-handoff'
 import { router } from './router'
 
 type ManifestPayload = Parameters<typeof photoLoader.init>[0]
@@ -53,4 +54,9 @@ async function bootstrap() {
       <RouterProvider router={router} />
     </Suspense>,
   )
+
+  // 安全兜底：防止任意异常路由或加载中断导致静态壳永久遮挡
+  setTimeout(() => {
+    dismissSsgShell({ waitImages: false })
+  }, 2000)
 }

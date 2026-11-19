@@ -1,12 +1,15 @@
 import { useScrollViewElement } from '@afilmory/ui'
 import clsx from 'clsx'
 import { useAtomValue } from 'jotai'
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router'
 
 import { gallerySettingAtom } from '~/atoms/app'
 import { useHasActiveFilters } from '~/hooks/useHasActiveFilters'
 import { useContextPhotos } from '~/hooks/usePhotoViewer'
 import { useVisiblePhotosDateRange } from '~/hooks/useVisiblePhotosDateRange'
+import { dismissSsgShell, replaySsgPendingAction } from '~/lib/ssg-handoff'
+import type { PhotoManifest } from '~/types/photo'
 
 import { MasonryView } from './MasonryView'
 import { PageFooter } from './PageFooter'
@@ -22,10 +25,14 @@ export const PhotosRoot = () => {
   const photos = useContextPhotos()
   const { dateRange, handleRender } = useVisiblePhotosDateRange(photos)
   const scrollElement = useScrollViewElement()
+  const navigate = useNavigate()
+  const hasDismissedSsgRef = useRef(false)
 
   // 监听滚动，控制浮动组件的显示
   useEffect(() => {
-    if (!scrollElement) return
+    if (!scrollElement) {
+      return
+    }
 
     const handleScroll = () => {
       const { scrollTop } = scrollElement
@@ -39,6 +46,45 @@ export const PhotosRoot = () => {
   }, [scrollElement])
 
   const hasActiveFilters = useHasActiveFilters()
+
+  const onMasonryRender = useCallback(
+    (startIndex: number, stopIndex: number, items: PhotoManifest[]) => {
+      handleRender(startIndex, stopIndex, items)
+      if (hasDismissedSsgRef.current) {
+        return
+      }
+      const ssgTileCount = document.querySelectorAll('#ssg-shell [data-ssg-photo]').length
+      const positionedCells = document.querySelectorAll(
+        '#root [role="gridcell"]:not([style*="visibility: hidden"])',
+      ).length
+      const readyToDismiss
+        = ssgTileCount === 0
+          || items.length === 0
+          || stopIndex + 1 >= items.length
+          || positionedCells >= Math.min(items.length, ssgTileCount)
+      if (!readyToDismiss) {
+        return
+      }
+      hasDismissedSsgRef.current = true
+      dismissSsgShell({
+        waitImages: !window.__SSG_PENDING_ACTION__,
+        scrollElement,
+        onDismiss: () => replaySsgPendingAction(navigate),
+      })
+    },
+    [handleRender, navigate, scrollElement],
+  )
+
+  useEffect(() => {
+    if (!hasDismissedSsgRef.current && (photos.length === 0 || viewMode === 'list' || hasActiveFilters)) {
+      hasDismissedSsgRef.current = true
+      dismissSsgShell({
+        waitImages: false,
+        scrollElement,
+        onDismiss: () => replaySsgPendingAction(navigate),
+      })
+    }
+  }, [hasActiveFilters, navigate, photos.length, scrollElement, viewMode])
 
   return (
     <>
@@ -60,7 +106,7 @@ export const PhotosRoot = () => {
             <ListView photos={photos} />
           </Suspense>
         ) : (
-          <MasonryView photos={photos} onRender={handleRender} />
+          <MasonryView photos={photos} onRender={onMasonryRender} />
         )}
       </div>
 
