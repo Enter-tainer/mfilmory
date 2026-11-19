@@ -13,7 +13,7 @@ import {
   TablerAperture,
 } from '~/icons'
 import { isMobileDevice } from '~/lib/device-viewport'
-import { ImageLoaderManager } from '~/lib/image-loader-manager'
+import type { ImageLoaderManager } from '~/lib/image-loader-manager'
 import { formatExifData } from '~/modules/metadata/formatExifData'
 import type { PhotoManifest } from '~/types/photo'
 
@@ -62,6 +62,9 @@ export const MasonryPhotoItem = memo(({
   const videoRef = useRef<HTMLVideoElement>(null)
   const hoverTimerRef = useRef<NodeJS.Timeout | null>(null)
   const imageLoaderManagerRef = useRef<ImageLoaderManager | null>(null)
+  const isHoveredRef = useRef(false)
+  const isUnmountedRef = useRef(false)
+  const isLoadingVideoRef = useRef(false)
 
   const handleImageLoad = () => {
     setImageLoaded(true)
@@ -90,82 +93,105 @@ export const MasonryPhotoItem = memo(({
   // 检查是否有视频内容（Live Photo 或 Motion Photo）
   const hasVideo = data.video !== undefined
 
-  // Live Photo/Motion Photo 视频加载逻辑
-  useEffect(() => {
-    if (!data.video || !imageLoaded || livePhotoVideoLoaded || isConvertingVideo || !videoRef.current) {
+  const playLoadedVideo = useCallback(() => {
+    setIsPlayingLivePhoto(true)
+    const video = videoRef.current
+    if (video) {
+      video.currentTime = 0
+      void video.play().catch((err) => {
+        console.warn('Failed to play live photo video:', err)
+      })
+    }
+  }, [])
+
+  const loadAndPlayVideo = useCallback(async () => {
+    if (!data.video || !videoRef.current || isLoadingVideoRef.current || livePhotoVideoLoaded) {
       return
     }
 
-    const { video, originalUrl } = data
+    isLoadingVideoRef.current = true
+    setIsConvertingVideo(true)
+    setVideoConversionError(null)
 
-    const loadVideo = async () => {
-      setIsConvertingVideo(true)
+    try {
+      const { ImageLoaderManager } = await import('~/lib/image-loader-manager')
+      if (isUnmountedRef.current || !videoRef.current) {
+        return
+      }
 
-      // 创建新的 image loader manager
       const imageLoaderManager = new ImageLoaderManager()
+      imageLoaderManagerRef.current?.cleanup()
       imageLoaderManagerRef.current = imageLoaderManager
 
-      try {
-        // 构造 VideoSource（适配前端格式）- 使用 type narrowing
-        let videoSource: Parameters<typeof imageLoaderManager.processVideo>[0]
+      const { video, originalUrl } = data
+      let videoSource: Parameters<ImageLoaderManager['processVideo']>[0]
 
-        if (video.type === 'motion-photo') {
-          videoSource = {
-            type: 'motion-photo',
-            imageUrl: originalUrl,
-            offset: video.offset,
-            size: video.size,
-            presentationTimestamp: video.presentationTimestamp,
-          }
-        } else if (video.type === 'live-photo') {
-          videoSource = {
-            type: 'live-photo',
-            videoUrl: video.videoUrl,
-          }
-        } else {
-          videoSource = { type: 'none' }
+      if (video.type === 'motion-photo') {
+        videoSource = {
+          type: 'motion-photo',
+          imageUrl: originalUrl,
+          offset: video.offset,
+          size: video.size,
+          presentationTimestamp: video.presentationTimestamp,
         }
+      }
+      else if (video.type === 'live-photo') {
+        videoSource = {
+          type: 'live-photo',
+          videoUrl: video.videoUrl,
+        }
+      }
+      else {
+        videoSource = { type: 'none' }
+      }
 
-        if (videoSource.type !== 'none') {
-          await imageLoaderManager.processVideo(videoSource, videoRef.current!)
-          setLivePhotoVideoLoaded(true)
+      if (videoSource.type !== 'none') {
+        await imageLoaderManager.processVideo(videoSource, videoRef.current)
+        if (isUnmountedRef.current) {
+          return
         }
-      } catch (videoError) {
-        console.error('Failed to process video:', videoError)
+        setLivePhotoVideoLoaded(true)
+        if (isHoveredRef.current) {
+          playLoadedVideo()
+        }
+      }
+    }
+    catch (videoError) {
+      console.error('Failed to process video:', videoError)
+      if (!isUnmountedRef.current) {
         setVideoConversionError(videoError)
-      } finally {
+      }
+    }
+    finally {
+      isLoadingVideoRef.current = false
+      if (!isUnmountedRef.current) {
         setIsConvertingVideo(false)
       }
     }
+  }, [data, livePhotoVideoLoaded, playLoadedVideo])
 
-    loadVideo()
-
-    return () => {
-      if (imageLoaderManagerRef.current) {
-        imageLoaderManagerRef.current.cleanup()
-        imageLoaderManagerRef.current = null
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.video, data.originalUrl, imageLoaded, livePhotoVideoLoaded])
-
-  // Live Photo/Motion Photo hover 处理（仅在桌面端）
+  // Live Photo/Motion Photo hover 处理（仅在桌面端，且 hover 时才按需加载视频）
   const handleMouseEnter = useCallback(() => {
-    if (isMobileDevice || !hasVideo || !livePhotoVideoLoaded || isPlayingLivePhoto || isConvertingVideo) {
+    isHoveredRef.current = true
+    if (isMobileDevice || !hasVideo || isPlayingLivePhoto || isConvertingVideo) {
       return
     }
 
     hoverTimerRef.current = setTimeout(() => {
-      setIsPlayingLivePhoto(true)
-      const video = videoRef.current
-      if (video) {
-        video.currentTime = 0
-        video.play()
+      if (!isHoveredRef.current || isUnmountedRef.current) {
+        return
+      }
+      if (livePhotoVideoLoaded) {
+        playLoadedVideo()
+      }
+      else {
+        void loadAndPlayVideo()
       }
     }, 200) // 200ms hover 延迟
-  }, [hasVideo, livePhotoVideoLoaded, isPlayingLivePhoto, isConvertingVideo])
+  }, [hasVideo, isConvertingVideo, isPlayingLivePhoto, livePhotoVideoLoaded, loadAndPlayVideo, playLoadedVideo])
 
   const handleMouseLeave = useCallback(() => {
+    isHoveredRef.current = false
     if (hoverTimerRef.current) {
       clearTimeout(hoverTimerRef.current)
       hoverTimerRef.current = null
@@ -186,12 +212,18 @@ export const MasonryPhotoItem = memo(({
     setIsPlayingLivePhoto(false)
   }, [])
 
-  // 清理定时器
+  // 清理定时器与视频加载器
   useEffect(() => {
+    isUnmountedRef.current = false
     return () => {
+      isUnmountedRef.current = true
       if (hoverTimerRef.current) {
         clearTimeout(hoverTimerRef.current)
         hoverTimerRef.current = null
+      }
+      if (imageLoaderManagerRef.current) {
+        imageLoaderManagerRef.current.cleanup()
+        imageLoaderManagerRef.current = null
       }
     }
   }, [])

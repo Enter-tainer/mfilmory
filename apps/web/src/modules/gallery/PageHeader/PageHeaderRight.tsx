@@ -6,10 +6,9 @@ import {
   DropdownMenuTrigger,
 } from '@afilmory/ui'
 import { useAtom, useSetAtom } from 'jotai'
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
-import { Drawer } from 'vaul'
 
 import { gallerySettingAtom, isCommandPaletteOpenAtom } from '~/atoms/app'
 import { siteConfig } from '~/config'
@@ -18,6 +17,8 @@ import { useMobile } from '~/hooks/useMobile'
 import { ViewPanel } from '../panels/ViewPanel'
 import { LanguageSwitcher } from './LanguageSwitcher'
 import { ActionIconButton, resolveSocialUrl } from './utils'
+
+const MobileViewDrawer = lazy(() => import('./MobileViewDrawer').then(m => ({ default: m.MobileViewDrawer })))
 
 export const PageHeaderRight = () => {
   const { t } = useTranslation()
@@ -208,6 +209,15 @@ const MobileViewButton = ({
   children: React.ReactNode
 }) => {
   const [open, setOpen] = useState(false)
+  const [hasOpened, setHasOpened] = useState(false)
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (nextOpen) {
+      setHasOpened(true)
+    }
+    setOpen(nextOpen)
+  }
+
   return (
     <>
       <button
@@ -215,7 +225,7 @@ const MobileViewButton = ({
         className="relative flex size-7 items-center justify-center rounded text-white/60 transition-colors duration-200 hover:bg-white/10 hover:text-white lg:size-8"
         title={title}
         aria-label={title}
-        onClick={() => setOpen(!open)}
+        onClick={() => handleOpenChange(!open)}
       >
         <i className={`${icon} text-sm lg:text-base`} aria-hidden="true" />
         {badge && (
@@ -224,15 +234,13 @@ const MobileViewButton = ({
           </span>
         )}
       </button>
-      <Drawer.Root open={open} onOpenChange={setOpen}>
-        <Drawer.Portal>
-          <Drawer.Overlay className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm" />
-          <Drawer.Content className="fixed right-0 bottom-0 left-0 z-50 flex flex-col rounded-t-2xl border-t border-zinc-200 bg-white/80 p-4 backdrop-blur-xl dark:border-zinc-800 dark:bg-black/80">
-            <div className="mx-auto mb-4 h-1.5 w-12 shrink-0 rounded-full bg-zinc-300 dark:bg-zinc-700" />
+      {(hasOpened || open) && (
+        <Suspense fallback={null}>
+          <MobileViewDrawer open={open} onOpenChange={handleOpenChange}>
             {children}
-          </Drawer.Content>
-        </Drawer.Portal>
-      </Drawer.Root>
+          </MobileViewDrawer>
+        </Suspense>
+      )}
     </>
   )
 }

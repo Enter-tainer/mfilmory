@@ -1,6 +1,7 @@
 {
   "name": "@afilmory/viewer-motion",
   "type": "module",
+  "sideEffects": false,
   "version": "0.0.5",
   "description": "Reusable motion primitives for fullscreen media viewers",
   "license": "MIT",

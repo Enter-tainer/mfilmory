@@ -103,7 +103,7 @@ together: a material fill, a backdrop blur matched to its role, and a hairline b
 | --- | --- | --- |
 | Floating panel, menu, popover, toast, viewer chrome | `backdrop-blur-2xl` | `context-menu`, `dropdown-menu`, `hover-card`, `dialog`, `sonner`, `tooltip`, `ExifPanel`, `FloatingActionButton`, `PhotoViewer` chrome |
 | Secondary control floating **on a photograph** | `backdrop-blur-md` | `MasonryPhotoItem` badges, `ListView` overlays, map markers, `FilterChip`, `GlassButton` |
-| Scrim / overlay behind a modal | `backdrop-blur-sm` | `Dialog.Overlay`, `ActionPanel` overlay |
+| Scrim / overlay behind a modal | `backdrop-blur-sm` | `Dialog.Overlay`, `MobileViewDrawer` overlay |
 | Top / bottom fade band over scrolling content | `<LinearBlur />` | `PageHeader`, `PageFooter` |
 
 `LinearBlur` (`packages/ui/src/progressive-blur`) is a *progressive* blur: 8 stacked
@@ -419,13 +419,13 @@ Existing code is not required to migrate immediately; new code must not add to t
 | --- | --- | --- |
 | `packages/ui/src/button/Button.tsx` | Vendored Tremor component using `text-gray-900 dark:text-gray-50`, `bg-gray-200 dark:bg-gray-900`, `bg-red-600` | §2.1 — neutral ramps and hand-rolled light/dark pairs instead of UIKit tokens |
 | `packages/utils/src/cn.ts` (`focusRing`, `hasErrorInput`) | `outline-blue-500`, `border-red-500`, `ring-red-200` | §2.1 / §2.2 — focus ring should follow `--color-accent` |
-| `apps/web/src/modules/gallery/ActionPanel.tsx:25` | `bg-white/80 dark:bg-black/80 border-zinc-200 dark:border-zinc-800` | §2.1 / §3.2 — should be `bg-material-thick` |
+| `apps/web/src/modules/gallery/PageHeader/MobileViewDrawer.tsx` | `bg-white/80 dark:bg-black/80 border-zinc-200 dark:border-zinc-800` | §2.1 / §3.2 — should be `bg-material-thick` |
 
 ### 13.2 Blur
 
 | Where | What |
 | --- | --- |
-| `HistogramChart`, `ActionPanel`, `PageHeaderRight`, `manifest.tsx`, `PhotoViewer`, `ActionButton` | `backdrop-blur-xl` — a step that has no assigned role |
+| `HistogramChart`, `MobileViewDrawer`, `PageHeaderRight`, `manifest.tsx`, `PhotoViewer`, `ActionButton` | `backdrop-blur-xl` — a step that has no assigned role |
 | `MobilePhotoInspectorSheet`, `ScrollArea` | `backdrop-blur-3xl` |
 | `ActiveFiltersHero/index.tsx` (×2), `inspector/LoadingIndicator.tsx` | bare `backdrop-blur` (Tailwind's unsuffixed 8px default) |
 | `packages/ui/src/select/index.tsx`, `packages/ui/src/sonner.tsx` | `backdrop-blur-background` — **not a valid Tailwind class**; no `--blur-background` theme key exists, so it compiles to nothing |

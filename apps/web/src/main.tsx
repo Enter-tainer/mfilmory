@@ -6,6 +6,7 @@ import { createRoot } from 'react-dom/client'
 import { RouterProvider } from 'react-router/dom'
 
 import { AppSkeleton } from './components/ui/app-skeleton'
+import { i18nReady } from './i18n'
 import { router } from './router'
 
 type ManifestPayload = Parameters<typeof photoLoader.init>[0]
@@ -44,7 +45,7 @@ async function resolveManifest(): Promise<ManifestPayload> {
 void bootstrap()
 
 async function bootstrap() {
-  const manifest = await resolveManifest()
+  const [manifest] = await Promise.all([resolveManifest(), i18nReady])
   photoLoader.init(manifest)
 
   createRoot(document.querySelector('#root')!).render(

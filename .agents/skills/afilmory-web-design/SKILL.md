@@ -120,7 +120,7 @@ Older files contradict the rules above. Proximity is not permission.
 | --- | --- |
 | `packages/ui/src/button/Button.tsx` | Vendored Tremor — `gray-*` ramps, hand-rolled `dark:` pairs |
 | `packages/utils/src/cn.ts` | `focusRing` hardcodes `outline-blue-500` instead of accent |
-| `apps/web/src/modules/gallery/ActionPanel.tsx:25` | `bg-white/80 dark:bg-black/80 border-zinc-200` |
+| `apps/web/src/modules/gallery/PageHeader/MobileViewDrawer.tsx` | `bg-white/80 dark:bg-black/80 border-zinc-200` |
 | `packages/ui/src/dialog/dialog.tsx` | `z-100000000`; context-menu uses `z-10060`, tooltip `z-9999` |
 | `packages/ui/src/select/index.tsx`, `sonner.tsx` | `backdrop-blur-background` — not a real class, compiles to nothing |
 | `Button.tsx`, `modal/Dialog.tsx` | `shape-squircle` is a no-op in `apps/web` (only defined in the dashboard's CSS) |

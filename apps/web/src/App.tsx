@@ -1,10 +1,11 @@
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { Outlet } from 'react-router'
 
 import { useCommandPaletteShortcut } from './hooks/useCommandPaletteShortcut'
 import { shouldSkipHeavyPrefetch } from './lib/network'
-import { CommandPalette } from './modules/cmdk/CommandPalette'
 import { RootProviders } from './providers/root-providers'
+
+const CommandPalette = lazy(() => import('./modules/cmdk/CommandPalette').then(m => ({ default: m.CommandPalette })))
 
 type IdleWindow = Window & {
   requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
@@ -50,6 +51,22 @@ function App() {
 
 const CommandPaletteContainer = () => {
   const { isOpen, setIsOpen } = useCommandPaletteShortcut()
-  return <CommandPalette isOpen={isOpen} onClose={() => setIsOpen(false)} />
+  const [hasOpened, setHasOpened] = useState(isOpen)
+
+  useEffect(() => {
+    if (isOpen) {
+      setHasOpened(true)
+    }
+  }, [isOpen])
+
+  if (!hasOpened && !isOpen) {
+    return null
+  }
+
+  return (
+    <Suspense fallback={null}>
+      <CommandPalette isOpen={isOpen} onClose={() => setIsOpen(false)} />
+    </Suspense>
+  )
 }
 export default App

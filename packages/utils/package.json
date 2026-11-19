@@ -1,6 +1,7 @@
 {
   "name": "@afilmory/utils",
   "type": "module",
+  "sideEffects": false,
   "version": "0.0.1",
   "private": true,
   "exports": {
