@@ -32,7 +32,7 @@ interface MasonryViewProps {
 
 export const MasonryView = ({ photos, onRender }: MasonryViewProps) => {
   const { columns } = useAtomValue(gallerySettingAtom)
-  const [containerWidth, setContainerWidth] = useState(0)
+  const [containerWidth, setContainerWidth] = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 0))
   const masonryRef = useRef<MasonryRef>(null)
   const isMobile = useMobile()
 
@@ -42,7 +42,6 @@ export const MasonryView = ({ photos, onRender }: MasonryViewProps) => {
       setContainerWidth(window.innerWidth)
     }
 
-    updateContainerWidth()
     window.addEventListener('resize', updateContainerWidth)
 
     return () => {

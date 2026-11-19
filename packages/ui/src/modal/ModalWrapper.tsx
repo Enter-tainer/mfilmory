@@ -1,0 +1,66 @@
+import { clsxm } from '@afilmory/utils'
+import { useEffect, useMemo, useState } from 'react'
+import { useEventCallback } from 'usehooks-ts'
+
+import { Dialog, DialogContent } from './Dialog'
+import type { ModalItem } from './ModalManager'
+import { Modal, modalItemsAtom } from './ModalManager'
+import { modalStore } from './store'
+import type { ModalComponent } from './types'
+
+export function ModalWrapper({ item }: { item: ModalItem }) {
+  const [open, setOpen] = useState(true)
+
+  useEffect(() => {
+    Modal.__registerCloser(item.id, () => setOpen(false))
+    return () => {
+      Modal.__unregisterCloser(item.id)
+    }
+  }, [item.id])
+
+  const dismiss = useMemo(
+    () => () => {
+      setOpen(false)
+    },
+    [],
+  )
+
+  const handleOpenChange = (o: boolean) => {
+    setOpen(o)
+  }
+
+  // After exit animation, remove from store
+  const handleAnimationComplete = useEventCallback(() => {
+    if (!open) {
+      const items = modalStore.get(modalItemsAtom)
+      modalStore.set(
+        modalItemsAtom,
+        items.filter(m => m.id !== item.id),
+      )
+    }
+  })
+
+  const Component = item.component as ModalComponent<any>
+
+  const { contentProps, contentClassName } = Component
+
+  const mergedContentConfig = {
+    ...contentProps,
+    ...item.modalContent,
+  }
+
+  const { dismissOnOutsideClick = true, ...restContentConfig } = mergedContentConfig
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent
+        className={clsxm('w-full max-w-md', contentClassName)}
+        onAnimationComplete={handleAnimationComplete}
+        dismissOnOutsideClick={item.dismissOnOutsideClick ?? dismissOnOutsideClick}
+        {...restContentConfig}
+      >
+        <Component modalId={item.id} dismiss={dismiss} {...(item.props as any)} />
+      </DialogContent>
+    </Dialog>
+  )
+}

@@ -304,3 +304,53 @@ hover/focus 某张照片时才 `import()` viewer 路由（190 KB br），`window
 - `PRELOADED_THUMBNAIL_COUNT` 与 `EAGER_IMAGE_COUNT` 必须相等，目前靠两处注释互相指向
   （没有构建期断言）。
 - `AFILMORY_EMBED_MANIFEST=true`（或 `pnpm dev`）时走内联分支，**不裁字段、也不发 preload**。
+
+---
+
+# 第三轮：首屏入口 JS 瘦身与按需加载（2026-11-20）
+
+## 实测结果（`scripts/perf/bytes-accounting.mjs`，br11，同源 `config.json` + 369 张照片 manifest）
+
+| 指标 | 优化前（`main`） | 优化后（Round 3） | Δ |
+|---|---:|---:|---:|
+| `html` | 26 457 B | 26 535 B | +78 B |
+| `inlineCss` | 24 968 B | 24 968 B | 0 B |
+| `js`（entry + modulepreload） | 286 513 B | 195 526 B | **−90 987 B（−31.76%）** |
+| `manifest` | 48 765 B | 48 765 B | 0 B |
+| **关键路径总计（TOTAL）** | **361 735 B** | **270 826 B** | **−90 909 B（−25.13%）** |
+
+- **主入口单包**：`index-*.js` 从 `839 361 B` 明文（`211 673 B br11`）降到 `331 859 B` 明文（`92 922 B br11`）。
+- **内联 CSS**：`check-inline-css.mjs` 确认 `215 060 B` 明文（`24 968 B br11`）与参照产物逐字节一致。
+- **首屏异步 chunk 透明口径**：
+  - 单语言 locale chunk（与 manifest 并行拉取，0 额外 RTT、0 FOUC）：`en` `4 298 B`、`zh-HK` `4 504 B`、`zh-CN` `4 508 B`、`zh-TW` `4 510 B`、`ko` `4 909 B`、`jp` `5 068 B`（br11）。
+  - 异步 `motion-features`（`domMax`）：`58 611 B` 明文 / `16 293 B br11`（不阻塞首帧渲染）。
+  - 即使计入这两项，首次访问总传输仍净减约 ~70 KB br11，且主线程首帧解析与执行开销显著下降。
+
+## 改了什么
+
+1. **`LazyMotion` `domMax` 异步化**：通过独立 proxy `apps/web/src/lib/motion-features.ts` 动态加载 `domMax`（避开 Rolldown 对已被静态导入的 `motion/react` barrel 做动态 `import()` 导致 namespace 无法拆分、产生 32 条碎片 `modulepreload` 的陷阱）。
+2. **包级 tree-shaking 与 `ExifRow` 拆分**：`packages/viewer-motion`、`packages/utils` 声明 `"sideEffects": false`；`packages/ui` 声明 `"sideEffects": ["**/*.css"]` 并去掉 `src/index.ts` 中重复导出的 `./checkbox`、`./sonner`；将依赖 `EllipsisHorizontalTextWithTooltip`（Radix Tooltip + Floating UI）的 `Row` 从 `formatExifData.tsx` 拆至 `ExifRow.tsx`，避免网格调用 `formatExifData` 时将 Tooltip 拖入首屏。
+3. **i18n 6 语言包按需加载**：`apps/web/src/@types/resources.ts` 改为纯类型导出，`apps/web/src/i18n.ts` 使用动态 `BackendModule` 按当前语言拉取单一 locale JSON，`apps/web/src/main.tsx` 的 `bootstrap()` 用 `Promise.all([resolveManifest(), i18nReady])` 与 manifest 并行等待（保留 `fallbackLng: { default: ['en'] }` 兜底非 `en`/`zh-CN` 语言的缺失键）。
+4. **非首屏组件懒加载与死代码清理**：
+   - 删除未被引用的死组件 `apps/web/src/modules/gallery/ActionPanel.tsx`，同步清理 `DESIGN.md` 与 `.agents/skills/afilmory-web-design/SKILL.md` 中的过期引用。
+   - `PhotosRoot.tsx`：`ActiveFiltersHero`、`ListView` 改为 `React.lazy`。
+   - `App.tsx`：`CommandPalette` 改为带 `hasOpened` 锁存的 `React.lazy`（首次打开后保留以维持退场动画）。
+   - `PageHeaderRight.tsx`：拆出 `MobileViewDrawer.tsx` 懒加载 `vaul` 抽屉。
+   - `context-menu-provider.tsx`：拆出 `context-menu-handler.tsx` 在首次右键打开时懒加载 Radix ContextMenu。
+   - `packages/ui/src/modal/ModalContainer.tsx`：拆出 `ModalWrapper.tsx` 在 `items.length > 0` 时懒加载 Radix Dialog + `usehooks-ts`。
+   - `root-providers.tsx`：通过独立 proxy `toaster-impl.tsx` + `DeferredToaster` 在进入 viewer（`viewerAtom.isOpen || pathname.startsWith('/photos/')`）后挂载 Sonner `<Toaster />`（审计确认全仓 `toast` 仅在 `RawExifViewer`、`ShareModal`、`viewer/hooks` 调用）。
+   - `MasonryPhotoItem.tsx`：移除缩略图加载完成后立即预下载桌面端 Live Photo / Motion Photo 视频的 `useEffect`，改为 `import type` + 桌面端 hover 200 ms 后才动态 `import('~/lib/image-loader-manager')`。
+5. **小修复两处**：`MasonryView.tsx` 首帧同步以 `window.innerWidth` 初始化 `containerWidth`；`apps/web/plugins/vite/og-image-plugin.ts` 移除与 `VitePWA` 重复的 `<link rel="manifest" href="/manifest.webmanifest" />`。
+
+## 明确未做的两项（及原因）
+
+- **未拆分 `photos-manifest.*.json`**：延续第二轮「manifest 拆成 index + 按需 detail → 否」的已验证结论（仅约 `3.9 KB br` 可挪出，不值得引入异步合并复杂度并破坏单文件契约）。
+- **未替换已懒加载组件（`ListView`、`ActiveFiltersHero`）中的既有 `lucide-react` 图标为 `i-mingcute-*`**：这些图标已移出首屏 JS，改用 `i-mingcute-*` 反而会让 Tailwind 把新 SVG 规则打入 `index.html` 的内联 CSS。
+
+## 验证摘要
+
+- `pnpm --filter @afilmory/web exec vite build`、`pnpm type-check`（含 `apps/web/plugins/**/*`）、变更文件定向 `eslint`、`check-block-comments.mjs` 全通过。
+- `assert-manifest-fields.mjs`（369 照片 / 9 236 字段 / 14 919 exif 子字段一致）、`check-inline-css.mjs`（215 060 B 逐字节一致）、`dist/index.html` 单条 `<link rel="manifest"`、入口 + 10 条 `modulepreload` chunk 扫描确认 `vaul` / `sonner` / `@use-gesture` / `@tanstack/virtual` / Radix Dialog·Tooltip·ContextMenu·Select / `domMax` / `image-convert` 均为 0 命中。
+- `probe-manifest-fields.mjs` 5/5 通过。
+- `verify-routes.ps1` + `diff-routes.mjs`（5 路由）：`deeplink`、`filter-camera`、`manifest-page`、`map`（340 GPS 地点）硬判据全通过，非 `/manifest` 路由 0 JS/资源错误、0 破图；`/` 上 `imgCount` 67→67、`renderedIds` 34→34（100% 重合）、`textLen` 1483→1483、33/33 照片文本片段集合逐字符一致，仅底部相邻两张（`MGT06415` / `MGT06601`）因 `masonic` interval-tree DOM 挂载顺序置换，已在未改动 `main` 基线上复测确认 `main` 自身即在两个完全相同的顺序间交替出现。
+- 4 项交互懒加载测试（`127.0.0.1:4822`）：动态语言切换（中文↔日本語↔English）、Cmd-K 触发懒加载 `ModalContainer` 自定义日期弹窗、移动端 390×844 触发懒加载 `MobileViewDrawer`、`/photos/:id` 右键触发懒加载 `ContextMenu`（`复制图像下载图像`）+ 分享复制触发 `DeferredToaster`（`[data-sonner-toast]`），均 0 JS 错误。

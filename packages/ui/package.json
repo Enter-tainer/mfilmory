@@ -1,6 +1,9 @@
 {
   "name": "@afilmory/ui",
   "type": "module",
+  "sideEffects": [
+    "**/*.css"
+  ],
   "version": "0.0.1",
   "private": true,
   "exports": {

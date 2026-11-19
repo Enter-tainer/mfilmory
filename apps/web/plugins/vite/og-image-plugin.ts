@@ -67,7 +67,7 @@ export function ogImagePlugin(options: OGImagePluginOptions = {}): Plugin {
         const pageUrl = siteUrl ?? '/'
         const imageUrl = siteUrl ? new URL(ogImagePath, siteUrl).href : ogImagePath
 
-        // 生成 meta 标签
+        // 生成 meta 标签（manifest.webmanifest 由 VitePWA 注入，避免重复输出两份 <link rel="manifest">）
         const metaTags = `
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website" />
@@ -95,7 +95,6 @@ export function ogImagePlugin(options: OGImagePluginOptions = {}): Plugin {
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
-    <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="shortcut icon" href="/favicon.ico" />
         `
 
