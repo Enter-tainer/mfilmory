@@ -145,6 +145,8 @@ export const SharedElementTransitionPreview = ({
         <img
           src={transition.imageSrc}
           alt=""
+          fetchPriority="high"
+          decoding="sync"
           draggable={false}
           style={{
             position: 'absolute',

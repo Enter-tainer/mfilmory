@@ -91,6 +91,10 @@ async function bootstrap() {
   const ssrLng = canHydrate ? (document.documentElement.dataset.ssrLng || SSR_DEFAULT_LNG) : undefined
   const appRoutes = createAppRoutes()
 
+  if (!canHydrate && currentRoute.startsWith('/photos/')) {
+    void import('~/pages/(main)/photos/[photoId]/index')
+  }
+
   const [manifest] = await Promise.all([
     resolveManifest(),
     initClientI18n(ssrLng ? { ssrLng } : undefined),

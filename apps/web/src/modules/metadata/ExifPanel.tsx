@@ -4,13 +4,11 @@ import type { PhotoManifestItem, PickedExif } from '@afilmory/builder'
 import { MotionButtonBase, ScrollArea } from '@afilmory/ui'
 import { clsxm, Spring } from '@afilmory/utils'
 import { isNil } from 'es-toolkit/compat'
-import { useAtomValue } from 'jotai'
 import { m } from 'motion/react'
 import type { FC } from 'react'
-import { Fragment, lazy, Suspense, useCallback, useMemo } from 'react'
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { isExiftoolLoadedAtom } from '~/atoms/app'
 import { useMobile } from '~/hooks/useMobile'
 import {
   CarbonIsoOutline,
@@ -34,6 +32,55 @@ import { RawExifViewer } from './RawExifViewer'
 // 而只有「带 GPS 的照片 + 展开 EXIF」时才真的需要它。
 const MiniMap = lazy(() => import('./MiniMap').then(m => ({ default: m.MiniMap })))
 
+const MiniMapPlaceholder = () => <div className="h-40 w-full animate-pulse rounded-lg bg-white/5" />
+
+const DeferredMiniMap: FC<{
+  latitude: number
+  longitude: number
+  photoId: string
+  enabled: boolean
+}> = ({ latitude, longitude, photoId, enabled }) => {
+  const isClient = useIsClient()
+  const slotRef = useRef<HTMLDivElement>(null)
+  const [hasEnteredView, setHasEnteredView] = useState(false)
+
+  useEffect(() => {
+    if (!isClient || hasEnteredView) {
+      return
+    }
+    const node = slotRef.current
+    if (!node || typeof IntersectionObserver === 'undefined') {
+      setHasEnteredView(true)
+      return
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some(entry => entry.isIntersecting)) {
+          setHasEnteredView(true)
+          observer.disconnect()
+        }
+      },
+      { rootMargin: '120px' },
+    )
+    observer.observe(node)
+    return () => {
+      observer.disconnect()
+    }
+  }, [hasEnteredView, isClient])
+
+  return (
+    <div ref={slotRef} className="h-40 w-full">
+      {isClient && enabled && hasEnteredView ? (
+        <Suspense fallback={<MiniMapPlaceholder />}>
+          <MiniMap latitude={latitude} longitude={longitude} photoId={photoId} />
+        </Suspense>
+      ) : (
+        <MiniMapPlaceholder />
+      )}
+    </div>
+  )
+}
+
 const captureChipClassName = 'border-accent/20 bg-accent/10 flex h-6 items-center gap-2 rounded-md border px-2'
 
 interface ExifPanelBaseProps {
@@ -41,6 +88,7 @@ interface ExifPanelBaseProps {
   exifData: PickedExif | null
   activeRegionId?: string | null
   onActiveRegionChange?: (regionId: string | null) => void
+  isPreviewReady?: boolean
 }
 
 interface ExifPanelProps extends ExifPanelBaseProps {
@@ -54,6 +102,7 @@ export const ExifPanel: FC<ExifPanelProps> = ({
   exifData,
   activeRegionId,
   onActiveRegionChange,
+  isPreviewReady = true,
   onClose,
   visible = true,
   disableEntryTransition = false,
@@ -61,7 +110,6 @@ export const ExifPanel: FC<ExifPanelProps> = ({
   const { t } = useTranslation()
   const isClient = useIsClient()
   const isMobile = useMobile()
-  const isExiftoolLoaded = useAtomValue(isExiftoolLoadedAtom)
 
   return (
     <m.div
@@ -105,7 +153,7 @@ export const ExifPanel: FC<ExifPanelProps> = ({
       />
       <div className="relative z-10 mb-4 flex shrink-0 items-center justify-between p-4 pb-0">
         <h3 className={`${isMobile ? 'text-base' : 'text-lg'} font-semibold`}>{t('exif.header.title')}</h3>
-        {isClient && !isMobile && isExiftoolLoaded && <RawExifViewer currentPhoto={currentPhoto} />}
+        {isClient && !isMobile && <RawExifViewer currentPhoto={currentPhoto} />}
         {isMobile && onClose && (
           <button
             type="button"
@@ -122,6 +170,7 @@ export const ExifPanel: FC<ExifPanelProps> = ({
         exifData={exifData}
         activeRegionId={activeRegionId}
         onActiveRegionChange={onActiveRegionChange}
+        isPreviewReady={isPreviewReady}
       />
     </m.div>
   )
@@ -138,6 +187,7 @@ export const ExifPanelContent: FC<ExifPanelContentProps> = ({
   exifData,
   activeRegionId,
   onActiveRegionChange,
+  isPreviewReady = true,
   onTagClick,
   rootClassName = 'flex-1 min-h-0 overflow-auto lg:overflow-hidden',
   viewportClassName = 'px-4 pb-4 **:select-text',
@@ -310,7 +360,7 @@ export const ExifPanelContent: FC<ExifPanelContentProps> = ({
 
         {currentPhoto.toneAnalysis && (
           <ExifSection title={t('exif.histogram')}>
-            <HistogramChart thumbnailUrl={currentPhoto.thumbnailUrl} />
+            <HistogramChart thumbnailUrl={currentPhoto.thumbnailUrl} enabled={isClient && isPreviewReady} />
           </ExifSection>
         )}
 
@@ -462,13 +512,12 @@ export const ExifPanelContent: FC<ExifPanelContentProps> = ({
                 )}
 
                 {decimalLatitude !== null && decimalLongitude !== null && (
-                  isClient ? (
-                    <Suspense fallback={<div className="h-40 w-full animate-pulse rounded-lg bg-white/5" />}>
-                      <MiniMap latitude={decimalLatitude} longitude={decimalLongitude} photoId={currentPhoto.id} />
-                    </Suspense>
-                  ) : (
-                    <div className="h-40 w-full animate-pulse rounded-lg bg-white/5" />
-                  )
+                  <DeferredMiniMap
+                    latitude={decimalLatitude}
+                    longitude={decimalLongitude}
+                    photoId={currentPhoto.id}
+                    enabled={isPreviewReady}
+                  />
                 )}
               </ExifSection>
             )}

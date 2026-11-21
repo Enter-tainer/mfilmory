@@ -1,6 +1,6 @@
 import { Modal, ScrollArea, ScrollElementContext } from '@afilmory/ui'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Outlet, useLocation, useParams, useSearchParams } from 'react-router'
 
 import { gallerySettingAtom } from '~/atoms/app'
@@ -8,7 +8,6 @@ import { getViewer, setViewer } from '~/atoms/viewer'
 import { siteConfig } from '~/config'
 import { useMobile } from '~/hooks/useMobile'
 import { usePhotos } from '~/hooks/usePhotoViewer'
-import { useIsClient } from '~/lib/ssr'
 import { normalizeDateRange } from '~/modules/gallery/dateRangeUtils'
 import { PhotosRoot } from '~/modules/gallery/PhotosRoot'
 import { PhotosProvider } from '~/providers/photos-provider'
@@ -18,11 +17,19 @@ export const Component = () => {
   useSyncViewerWithUrl()
   useSyncViewerCloseShortcut()
 
-  const isClient = useIsClient()
   const location = useLocation()
   const isMobile = useMobile()
   const photos = usePhotos()
-  const shouldRenderGallery = isClient || !location.pathname.startsWith('/photos/')
+  const isPhotoRoute = location.pathname.startsWith('/photos/')
+  const [hasMountedGallery, setHasMountedGallery] = useState(() => !isPhotoRoute)
+
+  useEffect(() => {
+    if (!isPhotoRoute && !hasMountedGallery) {
+      setHasMountedGallery(true)
+    }
+  }, [hasMountedGallery, isPhotoRoute])
+
+  const shouldRenderGallery = hasMountedGallery || !isPhotoRoute
 
   return (
     <>

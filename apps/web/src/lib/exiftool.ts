@@ -3,32 +3,28 @@
 // symlink this fork used to carry, which does not survive a Windows checkout.
 import zeroperlWasmUrl from '@6over3/zeroperl-ts/zeroperl.wasm?url'
 
-import { isExiftoolLoadedAtom } from '~/atoms/app'
-
-import { jotaiStore } from './jotai'
-
 const fetchZeroperlWasm = (..._args: unknown[]) => fetch(zeroperlWasmUrl)
 
 class ExifToolManagerStatic {
   private isLoaded = false
-
+  private loadPromise: Promise<void> | null = null
   private exifTool: typeof import('@uswriting/exiftool') | null = null
 
   async load() {
     if (this.isLoaded) {
       return
     }
-    const exiftool = await import('@uswriting/exiftool')
-    this.exifTool = exiftool
-    this.isLoaded = true
-
-    jotaiStore.set(isExiftoolLoadedAtom, true)
-  }
-
-  constructor() {
-    if (typeof window !== 'undefined') {
-      this.load()
+    if (!this.loadPromise) {
+      this.loadPromise = import('@uswriting/exiftool')
+        .then((exiftool) => {
+          this.exifTool = exiftool
+          this.isLoaded = true
+        })
+        .finally(() => {
+          this.loadPromise = null
+        })
     }
+    await this.loadPromise
   }
 
   async parse(buffer: Blob, filename?: string) {

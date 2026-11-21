@@ -23,7 +23,5 @@ export const gallerySettingAtom = atom({
   viewMode: 'masonry' as GalleryViewMode, // 视图模式：瀑布流或列表详情
 })
 
-export const isExiftoolLoadedAtom = atom(false)
-
 // Command Palette state
 export const isCommandPaletteOpenAtom = atom(false)

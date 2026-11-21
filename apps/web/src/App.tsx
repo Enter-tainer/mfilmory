@@ -23,7 +23,9 @@ function App() {
     // `_photoId_` chunk（186 KB）+ exiftool esm（42 KB）排在 2.4–2.9 s —— 慢网下它们就是
     // 在跟首屏缩略图抢流量、把 LCP 往后推。所以省流量模式 / 2G~3G 下干脆不预取：
     // 这类用户的瓶颈是字节数，让他在点开照片时再多等一次，好过首屏都慢。
-    if (shouldSkipHeavyPrefetch()) return
+    if (window.location.pathname.startsWith('/photos/') || shouldSkipHeavyPrefetch()) {
+      return
+    }
 
     const prefetchViewerRoute = () => {
       void import('~/pages/(main)/photos/[photoId]/index')

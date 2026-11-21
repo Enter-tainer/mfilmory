@@ -14,6 +14,8 @@ import {
 } from '~/icons'
 import { isMobileDevice } from '~/lib/device-viewport'
 import type { ImageLoaderManager } from '~/lib/image-loader-manager'
+import { shouldSkipHeavyPrefetch } from '~/lib/network'
+import { prewarmPreviewImage, prewarmViewerRoute } from '~/lib/preview-prewarm'
 import { formatExifData } from '~/modules/metadata/formatExifData'
 import type { PhotoManifest } from '~/types/photo'
 
@@ -61,6 +63,7 @@ export const MasonryPhotoItem = memo(({
   const imageRef = useRef<HTMLImageElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const hoverTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const imageLoaderManagerRef = useRef<ImageLoaderManager | null>(null)
   const isHoveredRef = useRef(false)
   const isUnmountedRef = useRef(false)
@@ -207,6 +210,44 @@ export const MasonryPhotoItem = memo(({
     }
   }, [isPlayingLivePhoto])
 
+  const handlePointerEnter = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.pointerType !== 'mouse' || shouldSkipHeavyPrefetch()) {
+        return
+      }
+      if (previewTimerRef.current) {
+        clearTimeout(previewTimerRef.current)
+      }
+      previewTimerRef.current = setTimeout(() => {
+        previewTimerRef.current = null
+        prewarmPreviewImage(data.previewUrl || data.thumbnailUrl, { priority: 'low' })
+      }, 80)
+    },
+    [data.previewUrl, data.thumbnailUrl],
+  )
+
+  const handlePointerLeave = useCallback(() => {
+    if (previewTimerRef.current) {
+      clearTimeout(previewTimerRef.current)
+      previewTimerRef.current = null
+    }
+  }, [])
+
+  const handlePointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.pointerType === 'mouse' && event.button !== 0) {
+        return
+      }
+      if (previewTimerRef.current) {
+        clearTimeout(previewTimerRef.current)
+        previewTimerRef.current = null
+      }
+      prewarmPreviewImage(data.previewUrl || data.thumbnailUrl, { priority: 'high' })
+      prewarmViewerRoute()
+    },
+    [data.previewUrl, data.thumbnailUrl],
+  )
+
   // 视频播放结束处理
   const handleVideoEnded = useCallback(() => {
     setIsPlayingLivePhoto(false)
@@ -220,6 +261,10 @@ export const MasonryPhotoItem = memo(({
       if (hoverTimerRef.current) {
         clearTimeout(hoverTimerRef.current)
         hoverTimerRef.current = null
+      }
+      if (previewTimerRef.current) {
+        clearTimeout(previewTimerRef.current)
+        previewTimerRef.current = null
       }
       if (imageLoaderManagerRef.current) {
         imageLoaderManagerRef.current.cleanup()
@@ -239,6 +284,9 @@ export const MasonryPhotoItem = memo(({
       onClick={handleClick}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
+      onPointerEnter={handlePointerEnter}
+      onPointerLeave={handlePointerLeave}
+      onPointerDown={handlePointerDown}
     >
       {/* Blurhash 占位符 */}
       {data.thumbHash && <Thumbhash thumbHash={data.thumbHash} className="absolute inset-0" />}

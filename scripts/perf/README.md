@@ -92,6 +92,7 @@ viewport 是 1258×566，脚本会设成 1440×900 并把实测值写进 `.viewp
 
 | 脚本 | 用途 |
 |---|---|
+| `measure-photo-preview.mjs` | `/photos/:photoId` 照片详情页预览图绘制延迟与水合 A/B 基准（3 次冷启动中位数 + 3500ms 延迟 JS SSR 直出与 0px 无缝交接 + hover/ArrowRight/Esc/MiniMap/RawEXIF/Share/ContextMenu/Mobile/Zero-JS 全套回归）。 |
 | `bytes-accounting.mjs` | 关键路径字节账，**兼容 CSS 内联与外链**（`critical-bytes.mjs` 只算外链，一旦有 PR 把 CSS 内联，用那个会算错）。支持一次比两个 dist。 |
 | `check-preload-reuse.mjs` | 逐路由核对 HTML 里 `preload as=image` 的那几张有没有被 `<img>` 真正复用。实测 `/` 与 `/photos/:id` 是 4/4，`/?cameras=…` 与 `/map` 是 0/4（那两张页面首屏不是默认排序的网格）。 |
 | `compare-overscan.mjs` | 同一份代码在一组 `overscanBy` 取值下的首屏挂载数 / 缩略图请求数（1440×900 与 390×844）。 |

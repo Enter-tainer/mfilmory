@@ -10,13 +10,14 @@ import { NotFound } from '~/components/common/NotFound'
 import { useContextPhotos, usePhotoViewer } from '~/hooks/usePhotoViewer'
 import { useTitle } from '~/hooks/useTitle'
 import { deriveAccentFromSources } from '~/lib/color'
-import { PhotoViewer } from '~/modules/viewer'
+import { PhotoViewer } from '~/modules/viewer/PhotoViewer'
 
 export const Component = () => {
   const photoViewer = usePhotoViewer()
   const viewerState = useAtomValue(viewerAtom)
   const photos = useContextPhotos()
   const [disableEntryTransition] = useState(() => !isHydrationEnded())
+  const hasDerivedAccentRef = useRef(false)
 
   const [ref, setRef] = useState<HTMLElement | null>(null)
   const rootPortalValue = useMemo(
@@ -96,6 +97,7 @@ export const Component = () => {
     }
 
     let isCancelled = false
+    let cleanupTimer: ReturnType<typeof setTimeout> | null = null
 
     ;(async () => {
       try {
@@ -104,23 +106,30 @@ export const Component = () => {
           thumbnailUrl: current.thumbnailUrl,
         })
         if (!isCancelled) {
-          const $css = document.createElement('style')
-          $css.textContent = `
+          if (hasDerivedAccentRef.current) {
+            const $css = document.createElement('style')
+            $css.textContent = `
          * {
              transition: color 0.2s ease-in-out, background-color 0.2s ease-in-out;
             }
           `
-          document.head.append($css)
+            document.head.append($css)
 
-          setTimeout(() => {
-            $css.remove()
-          }, 100)
+            cleanupTimer = setTimeout(() => {
+              $css.remove()
+              cleanupTimer = null
+            }, 100)
+          }
+          else {
+            hasDerivedAccentRef.current = true
+          }
 
           setAccentColor(color ?? null)
         }
       }
       catch {
         if (!isCancelled) {
+          hasDerivedAccentRef.current = true
           setAccentColor(null)
         }
       }
@@ -128,6 +137,9 @@ export const Component = () => {
 
     return () => {
       isCancelled = true
+      if (cleanupTimer) {
+        clearTimeout(cleanupTimer)
+      }
     }
   }, [photoViewer.currentIndex, photos])
 

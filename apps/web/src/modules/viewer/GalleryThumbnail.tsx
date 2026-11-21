@@ -192,6 +192,9 @@ export const GalleryThumbnail: FC<{
                         <img
                           src={photo.thumbnailUrl}
                           alt={photo.title}
+                          loading="lazy"
+                          decoding="async"
+                          fetchPriority="low"
                           className="absolute inset-0 h-full w-full object-cover"
                         />
                       </button>
@@ -216,6 +219,7 @@ export const GalleryThumbnail: FC<{
                           <img
                             src={photo.thumbnailUrl}
                             alt={photo.title}
+                            decoding="async"
                             className="absolute inset-0 h-full w-full object-cover"
                           />
                         </div>
@@ -253,6 +257,9 @@ export const GalleryThumbnail: FC<{
                     <img
                       src={photo.thumbnailUrl}
                       alt={photo.title}
+                      loading="lazy"
+                      decoding="async"
+                      fetchPriority="low"
                       className="absolute inset-0 h-full w-full object-cover"
                     />
                   </button>

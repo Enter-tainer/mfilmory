@@ -55,6 +55,32 @@ export const getProgressiveImageVisualReady = ({
   return Boolean((thumbnailSrc && isThumbnailLoaded) || isHighResImageRendered)
 }
 
+function normalizeUrlForComparison(value: string): string {
+  try {
+    return new URL(value, 'http://localhost').href
+  }
+  catch {
+    try {
+      return decodeURIComponent(value)
+    }
+    catch {
+      return value
+    }
+  }
+}
+
+function urlMatchesThumbnail(candidate: string | undefined, thumbnailSrc: string): boolean {
+  if (!candidate) {
+    return false
+  }
+  if (candidate.includes(thumbnailSrc) || candidate === thumbnailSrc) {
+    return true
+  }
+  const normalizedCandidate = normalizeUrlForComparison(candidate)
+  const normalizedThumbnail = normalizeUrlForComparison(thumbnailSrc)
+  return normalizedCandidate === normalizedThumbnail || normalizedCandidate.includes(normalizedThumbnail)
+}
+
 export const isThumbnailElementVisuallyReady = ({
   currentSrc,
   naturalWidth,
@@ -65,7 +91,7 @@ export const isThumbnailElementVisuallyReady = ({
     return false
   }
 
-  return Boolean((currentSrc && currentSrc.includes(thumbnailSrc)) || src === thumbnailSrc)
+  return urlMatchesThumbnail(currentSrc, thumbnailSrc) || urlMatchesThumbnail(src, thumbnailSrc)
 }
 
 export const shouldHideCurrentViewerImage = ({

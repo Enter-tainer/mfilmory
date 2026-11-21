@@ -13,11 +13,13 @@ import {
   SlidersHorizontal,
   Timer,
 } from 'lucide-react'
-import { useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { useMobile } from '~/hooks/useMobile'
 import { useContextPhotos, usePhotoViewer } from '~/hooks/usePhotoViewer'
+import { shouldSkipHeavyPrefetch } from '~/lib/network'
+import { prewarmPreviewImage, prewarmViewerRoute } from '~/lib/preview-prewarm'
 import { formatExifData } from '~/modules/metadata/formatExifData'
 import type { PhotoManifest } from '~/types/photo'
 
@@ -96,6 +98,54 @@ const PhotoCard = ({ photo }: { photo: PhotoManifest }) => {
   const photos = useContextPhotos()
   const photoViewer = usePhotoViewer()
   const imageRef = useRef<HTMLImageElement>(null)
+  const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (previewTimerRef.current) {
+        clearTimeout(previewTimerRef.current)
+        previewTimerRef.current = null
+      }
+    }
+  }, [])
+
+  const handlePointerEnter = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.pointerType !== 'mouse' || shouldSkipHeavyPrefetch()) {
+        return
+      }
+      if (previewTimerRef.current) {
+        clearTimeout(previewTimerRef.current)
+      }
+      previewTimerRef.current = setTimeout(() => {
+        previewTimerRef.current = null
+        prewarmPreviewImage(photo.previewUrl || photo.thumbnailUrl, { priority: 'low' })
+      }, 80)
+    },
+    [photo.previewUrl, photo.thumbnailUrl],
+  )
+
+  const handlePointerLeave = useCallback(() => {
+    if (previewTimerRef.current) {
+      clearTimeout(previewTimerRef.current)
+      previewTimerRef.current = null
+    }
+  }, [])
+
+  const handlePointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.pointerType === 'mouse' && event.button !== 0) {
+        return
+      }
+      if (previewTimerRef.current) {
+        clearTimeout(previewTimerRef.current)
+        previewTimerRef.current = null
+      }
+      prewarmPreviewImage(photo.previewUrl || photo.thumbnailUrl, { priority: 'high' })
+      prewarmViewerRoute()
+    },
+    [photo.previewUrl, photo.thumbnailUrl],
+  )
 
   const handleClick = () => {
     const photoIndex = photos.findIndex(p => p.id === photo.id)
@@ -128,6 +178,9 @@ const PhotoCard = ({ photo }: { photo: PhotoManifest }) => {
   return (
     <div
       onClick={handleClick}
+      onPointerEnter={handlePointerEnter}
+      onPointerLeave={handlePointerLeave}
+      onPointerDown={handlePointerDown}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {

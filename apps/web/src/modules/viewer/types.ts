@@ -33,12 +33,15 @@ export interface ProgressiveImageProps {
   onZoomChange?: (isZoomed: boolean) => void
   onBlobSrcChange?: (blobSrc: string | null) => void
   onVisualReadyChange?: (ready: boolean) => void
+  onPreviewSettled?: (ready: boolean) => void
 
   enableZoom?: boolean
   enablePan?: boolean
   maxZoom?: number
   minZoom?: number
   disableThumbnailTransition?: boolean
+  canLoadPreview?: boolean
+  eagerRevealPreview?: boolean
 
   isCurrentImage?: boolean
   shouldRenderHighRes?: boolean
@@ -73,8 +76,6 @@ export interface ProgressiveImageState {
   highResLoaded: boolean
   error: boolean
   isHighResImageRendered: boolean
-  currentScale: number
-  showScaleIndicator: boolean
   isThumbnailLoaded: boolean
   isLivePhotoPlaying: boolean
 }

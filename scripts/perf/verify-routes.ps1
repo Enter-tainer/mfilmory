@@ -63,15 +63,14 @@ $builds = @(
 
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 $stableFailures = 0
+$runId = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 
 foreach ($b in $builds) {
   foreach ($r in $routes) {
     if ($Only -and "$($b.label):$($r.slug)" -notlike $Only) { continue }
     $prefix = "$($b.label)--$($r.slug)"
-    $session = "perf-routes-$base-$prefix"
+    $session = "perf-routes-$runId-$prefix"
     $url = "http://127.0.0.1:$($b.port)$($r.path)"
-
-    & agent-browser --session $session close 2>$null | Out-Null
 
     # --init-script 必须在首次导航之前注册。注意：带 `--init-script` 的 open 会**重启浏览器**，
     # 把之前 set 的 viewport 重置回默认 1258x566 —— 所以 viewport 必须在 open **之后**设。
