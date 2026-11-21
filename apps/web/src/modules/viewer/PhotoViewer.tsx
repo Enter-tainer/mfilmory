@@ -17,7 +17,7 @@ import {
 } from '@afilmory/viewer-motion'
 import { PanelRightOpen } from 'lucide-react'
 import { AnimatePresence, m } from 'motion/react'
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Swiper as SwiperType } from 'swiper'
 import { Navigation, Virtual } from 'swiper/modules'
@@ -27,6 +27,8 @@ import { useMediaQuery } from 'usehooks-ts'
 import { siteConfig } from '~/config'
 import { useMobile } from '~/hooks/useMobile'
 import { deriveAccentFromSources } from '~/lib/color'
+import { shouldSkipHeavyPrefetch } from '~/lib/network'
+import { prewarmPreviewImage } from '~/lib/preview-prewarm'
 import { useIsClient } from '~/lib/ssr'
 import type { LoadingIndicatorRef } from '~/modules/inspector/LoadingIndicator'
 import { LoadingIndicator } from '~/modules/inspector/LoadingIndicator'
@@ -35,10 +37,13 @@ import { ShareModal } from '~/modules/social/ShareModal'
 import type { PhotoManifest } from '~/types/photo'
 
 import { resolvePhotoViewerEntryState, shouldHideCurrentViewerImage } from './entry-animation-state'
-import { GalleryThumbnail } from './GalleryThumbnail'
-import { MobilePhotoInspectorSheet } from './MobilePhotoInspectorSheet'
 import { getRenderablePhotoRegions } from './photo-region-bounds'
 import { ProgressiveImage } from './ProgressiveImage'
+
+const GalleryThumbnail = lazy(() => import('./GalleryThumbnail').then(m => ({ default: m.GalleryThumbnail })))
+const MobilePhotoInspectorSheet = lazy(
+  () => import('./MobilePhotoInspectorSheet').then(m => ({ default: m.MobilePhotoInspectorSheet })),
+)
 
 interface PhotoViewerProps {
   photos: PhotoManifest[]
@@ -51,6 +56,8 @@ interface PhotoViewerProps {
   disableEntryTransition?: boolean
   onExitComplete?: () => void
 }
+
+const PREVIEW_SECONDARY_FALLBACK_TIMEOUT_MS = 4500
 
 const AFILMORY_VIEWER_FRAME_LAYOUT = {
   desktopSidebarWidthRem: 20,
@@ -81,8 +88,16 @@ export const PhotoViewer = ({
   const [dragDismissExitFrame, setDragDismissExitFrame] = useState<AnimationFrameRect | null>(null)
   const [entrySuppressedPhotoId] = useState(() => (disableEntryTransition ? (photos[currentIndex]?.id ?? null) : null))
   const [regionAccentColor, setRegionAccentColor] = useState(siteConfig.accentColor)
+  const [settledPreviewPhotoId, setSettledPreviewPhotoId] = useState<string | null>(null)
+  const [previewTimeoutPhotoId, setPreviewTimeoutPhotoId] = useState<string | null>(null)
+  const [hasSecondaryMounted, setHasSecondaryMounted] = useState(false)
 
   const currentPhoto = photos[currentIndex]
+  const currentPhotoId = currentPhoto?.id ?? null
+  const isCurrentPreviewSettled = Boolean(currentPhotoId && settledPreviewPhotoId === currentPhotoId)
+  const isSecondaryReady = Boolean(
+    currentPhotoId && (isCurrentPreviewSettled || previewTimeoutPhotoId === currentPhotoId),
+  )
   const [showAllRegions, setShowAllRegions] = useState(false)
   const [activeRegionId, setActiveRegionId] = useState<string | null>(null)
   const currentRegions = useMemo(
@@ -259,12 +274,68 @@ export const PhotoViewer = ({
       setIsImageZoomed(false)
       setIsDesktopInspectorVisible(!isMobile)
       setCurrentBlobSrc(null)
+      setSettledPreviewPhotoId(null)
+      setPreviewTimeoutPhotoId(null)
+      setHasSecondaryMounted(false)
       if (!dragDismissExitFrame) {
         resetMobileInteractions()
       }
       setShowAllRegions(false)
     }
   }, [dragDismissExitFrame, isMobile, isOpen, resetMobileInteractions])
+
+  useEffect(() => {
+    if (isClient && isOpen && isSecondaryReady && !hasSecondaryMounted) {
+      setHasSecondaryMounted(true)
+    }
+  }, [hasSecondaryMounted, isClient, isOpen, isSecondaryReady])
+
+  useEffect(() => {
+    if (!isClient || !isOpen || !currentPhotoId || isCurrentPreviewSettled) {
+      return
+    }
+    const timer = window.setTimeout(() => {
+      setPreviewTimeoutPhotoId(currentPhotoId)
+    }, PREVIEW_SECONDARY_FALLBACK_TIMEOUT_MS)
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [currentPhotoId, isClient, isCurrentPreviewSettled, isOpen])
+
+  useEffect(() => {
+    if (!isOpen || !isCurrentPreviewSettled || shouldSkipHeavyPrefetch()) {
+      return
+    }
+    const nextPhoto = photos[currentIndex + 1]
+    const prevPhoto = photos[currentIndex - 1]
+    const nextUrl = nextPhoto?.previewUrl || nextPhoto?.thumbnailUrl
+    const prevUrl = prevPhoto?.previewUrl || prevPhoto?.thumbnailUrl
+    if (!nextUrl && !prevUrl) {
+      return
+    }
+
+    const runPrewarm = () => {
+      if (nextUrl) {
+        prewarmPreviewImage(nextUrl, { priority: 'low' })
+      }
+      if (prevUrl) {
+        prewarmPreviewImage(prevUrl, { priority: 'low' })
+      }
+    }
+
+    type IdleWindow = Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
+      cancelIdleCallback?: (handle: number) => void
+    }
+    const idleWindow = window as IdleWindow
+    if (idleWindow.requestIdleCallback) {
+      const handle = idleWindow.requestIdleCallback(runPrewarm, { timeout: 600 })
+      return () => idleWindow.cancelIdleCallback?.(handle)
+    }
+
+    const timer = window.setTimeout(runPrewarm, 150)
+    return () => window.clearTimeout(timer)
+  }, [currentIndex, isCurrentPreviewSettled, isOpen, photos])
 
   useEffect(() => {
     setShowAllRegions(false)
@@ -321,6 +392,15 @@ export const PhotoViewer = ({
   const handleBlobSrcChange = useCallback((blobSrc: string | null) => {
     setCurrentBlobSrc(blobSrc)
   }, [])
+
+  const handleCurrentPreviewSettled = useCallback(
+    (ready: boolean) => {
+      if (ready && currentPhotoId) {
+        setSettledPreviewPhotoId(currentPhotoId)
+      }
+    },
+    [currentPhotoId],
+  )
 
   useEffect(() => {
     if (isMobile && isImageZoomed && isInspectorVisible) {
@@ -384,6 +464,12 @@ export const PhotoViewer = ({
   if (!currentPhoto) {
     return null
   }
+
+  const thumbnailStripFallback = (
+    <div className="pb-safe bg-material-medium z-10 shrink-0 backdrop-blur-2xl">
+      <div className="h-12 lg:h-16" />
+    </div>
+  )
 
   return (
     <>
@@ -589,6 +675,8 @@ export const PhotoViewer = ({
                             <img
                               src={currentPhoto.previewUrl || currentPhoto.thumbnailUrl || currentPhoto.originalUrl}
                               alt=""
+                              fetchPriority="high"
+                              decoding="sync"
                               className="absolute inset-0 h-full w-full object-contain"
                               draggable={false}
                             />
@@ -602,7 +690,8 @@ export const PhotoViewer = ({
                             src={currentPhoto.previewUrl || currentPhoto.thumbnailUrl || currentPhoto.originalUrl}
                             alt={currentPhoto.title}
                             fetchPriority="high"
-                            decoding="async"
+                            loading="eager"
+                            decoding="sync"
                             className="h-full w-full object-contain"
                           />
                         </div>
@@ -656,8 +745,8 @@ export const PhotoViewer = ({
                                     src={photo.originalUrl}
                                     thumbnailSrc={photo.previewUrl || photo.thumbnailUrl}
                                     alt={photo.title}
-                                    width={isCurrentImage ? currentPhoto.width : undefined}
-                                    height={isCurrentImage ? currentPhoto.height : undefined}
+                                    width={photo.width}
+                                    height={photo.height}
                                     className="h-full w-full object-contain"
                                     enablePan={isCurrentImage ? !isMobile || isImageZoomed : true}
                                     enableZoom={true}
@@ -665,7 +754,12 @@ export const PhotoViewer = ({
                                     onZoomChange={isCurrentImage ? handleZoomChange : undefined}
                                     onBlobSrcChange={isCurrentImage ? handleBlobSrcChange : undefined}
                                     onVisualReadyChange={isCurrentImage ? setIsCurrentImageVisualReady : undefined}
-                                    disableThumbnailTransition={isCurrentImage && entryTransition?.variant === 'entry'}
+                                    onPreviewSettled={isCurrentImage ? handleCurrentPreviewSettled : undefined}
+                                    canLoadPreview={isCurrentImage || isSecondaryReady}
+                                    eagerRevealPreview={isCurrentImage && disableEntryTransition}
+                                    disableThumbnailTransition={
+                                      isCurrentImage && (entryTransition?.variant === 'entry' || disableEntryTransition)
+                                    }
                                     videoSource={
                                       photo.video?.type === 'motion-photo'
                                         ? {
@@ -750,36 +844,48 @@ export const PhotoViewer = ({
                     style={isMobile ? { opacity: thumbnailsOpacity, y: thumbnailsY } : undefined}
                     className={isMobile && isInspectorVisible ? 'pointer-events-none' : undefined}
                   >
-                    <GalleryThumbnail
-                      currentIndex={currentIndex}
-                      photos={photos}
-                      onIndexChange={onIndexChange}
-                      visible={isViewerContentVisible}
-                      disableEntryTransition={disableEntryTransition}
-                    />
+                    {isClient && (hasSecondaryMounted || isSecondaryReady) ? (
+                      <Suspense fallback={thumbnailStripFallback}>
+                        <GalleryThumbnail
+                          currentIndex={currentIndex}
+                          photos={photos}
+                          onIndexChange={onIndexChange}
+                          visible={isViewerContentVisible}
+                          disableEntryTransition={disableEntryTransition}
+                        />
+                      </Suspense>
+                    ) : (
+                      thumbnailStripFallback
+                    )}
                   </m.div>
                 </m.div>
               </div>
 
               {/* EXIF 面板 - 根据设备与折叠状态展示 */}
               {isMobile ? (
-                <MobilePhotoInspectorSheet
-                  createPresentation={createInspectorSheetPresentation}
-                  currentPhoto={currentPhoto}
-                  exifData={currentPhoto.exif}
-                  activeRegionId={activeRegionId}
-                  isInteractive={isMobileInspectorVisible}
-                  progress={inspectorProgress}
-                  resolveHeight={resolveInspectorSheetHeight}
-                  onClose={closeInspector}
-                  onActiveRegionChange={setActiveRegionId}
-                />
+                isClient && (hasSecondaryMounted || isSecondaryReady || isMobileInspectorVisible) ? (
+                  <Suspense fallback={null}>
+                    <MobilePhotoInspectorSheet
+                      createPresentation={createInspectorSheetPresentation}
+                      currentPhoto={currentPhoto}
+                      exifData={currentPhoto.exif}
+                      activeRegionId={activeRegionId}
+                      isInteractive={isMobileInspectorVisible}
+                      isPreviewReady={isSecondaryReady}
+                      progress={inspectorProgress}
+                      resolveHeight={resolveInspectorSheetHeight}
+                      onClose={closeInspector}
+                      onActiveRegionChange={setActiveRegionId}
+                    />
+                  </Suspense>
+                ) : null
               ) : (
                 isInspectorVisible && (
                   <ExifPanel
                     currentPhoto={currentPhoto}
                     exifData={currentPhoto.exif}
                     activeRegionId={activeRegionId}
+                    isPreviewReady={isClient && isSecondaryReady}
                     visible={isInspectorVisible && isViewerContentVisible}
                     disableEntryTransition={disableEntryTransition}
                     onClose={() => setIsDesktopInspectorVisible(false)}

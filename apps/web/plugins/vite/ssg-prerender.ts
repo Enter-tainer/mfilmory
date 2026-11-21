@@ -73,6 +73,8 @@ interface OutputChunkLike {
   type: 'chunk'
   fileName: string
   facadeModuleId?: string | null
+  isEntry?: boolean
+  imports?: string[]
   viteMetadata?: { importedCss?: Set<string> | string[] }
 }
 
@@ -180,7 +182,11 @@ function replaceMainInlinedCssWithLink(html: string, mainCssFile: string | undef
     throw new Error(`[ssg-prerender] expected exactly 1 <style data-inline-main-css> tag, found ${matches.length}`)
   }
   const match = matches[0]
-  return `${html.slice(0, match.index)}<link rel="stylesheet" href="${escapeAttr(`${base}${mainCssFile}`)}">${html.slice(match.index + match[0].length)}`
+  const withoutInlined = `${html.slice(0, match.index)}${html.slice(match.index + match[0].length)}`
+  return injectBeforeModuleScripts(
+    withoutInlined,
+    `<link rel="stylesheet" href="${escapeAttr(`${base}${mainCssFile}`)}">`,
+  )
 }
 
 function injectHeadTags(html: string, tags: string): string {
@@ -192,6 +198,80 @@ function injectHeadTags(html: string, tags: string): string {
     throw new Error('[ssg-prerender] missing </head> in HTML')
   }
   return `${html.slice(0, headCloseIdx)}${tags}${html.slice(headCloseIdx)}`
+}
+
+function injectBeforeModuleScripts(html: string, tags: string): string {
+  if (!tags) {
+    return html
+  }
+  const headCloseIdx = html.indexOf('</head>')
+  if (headCloseIdx === -1) {
+    throw new Error('[ssg-prerender] missing </head> in HTML')
+  }
+  const headHtml = html.slice(0, headCloseIdx)
+  const moduleScriptMatch = /<script\b[^>]*?\stype="module"[^>]*>/i.exec(headHtml)
+  if (!moduleScriptMatch || moduleScriptMatch.index === undefined) {
+    return injectHeadTags(html, tags)
+  }
+  const insertAt = moduleScriptMatch.index
+  return `${html.slice(0, insertAt)}${tags}${html.slice(insertAt)}`
+}
+
+function injectAfterPreconnect(html: string, tag: string): string {
+  if (!tag) {
+    return html
+  }
+  const headCloseIdx = html.indexOf('</head>')
+  if (headCloseIdx === -1) {
+    throw new Error('[ssg-prerender] missing </head> in HTML')
+  }
+  const headHtml = html.slice(0, headCloseIdx)
+  const preconnectMatch = /<link\b[^>]*?\srel="preconnect"[^>]*>/i.exec(headHtml)
+  if (!preconnectMatch || preconnectMatch.index === undefined) {
+    return injectHeadTags(html, tag)
+  }
+  const insertAt = preconnectMatch.index + preconnectMatch[0].length
+  return `${html.slice(0, insertAt)}${tag}${html.slice(insertAt)}`
+}
+
+function collectTransitiveStaticAssets(
+  bundle: BundleLike,
+  startFileNames: string[],
+): { js: string[], css: string[] } {
+  const visited = new Set<string>()
+  const queue = [...startFileNames]
+  const js: string[] = []
+  const cssSet = new Set<string>()
+
+  while (queue.length > 0) {
+    const fileName = queue.shift()!
+    if (visited.has(fileName)) {
+      continue
+    }
+    const item = bundle[fileName]
+    if (!item || item.type !== 'chunk') {
+      continue
+    }
+    visited.add(fileName)
+    js.push(fileName)
+
+    const importedCss = item.viteMetadata?.importedCss
+    if (importedCss) {
+      for (const cssFile of importedCss) {
+        if (cssFile.endsWith('.css')) {
+          cssSet.add(cssFile)
+        }
+      }
+    }
+
+    for (const dep of item.imports ?? []) {
+      if (!visited.has(dep)) {
+        queue.push(dep)
+      }
+    }
+  }
+
+  return { js, css: Array.from(cssSet) }
 }
 
 // 首页 HTML 也会作为 Pages SPA 回退发给 /map、/manifest、带查询参数的筛选链接与 404；
@@ -206,10 +286,10 @@ export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
   let outDir = ''
   let base = '/'
   let mainCss: string | undefined
-  let mapJs: string | undefined
-  let mapCss: string | undefined
-  let photoJs: string | undefined
-  let photoCss: string | undefined
+  let mapJsFiles: string[] = []
+  let mapCssFiles: string[] = []
+  let photoJsFiles: string[] = []
+  let photoCssFiles: string[] = []
 
   return {
     name: 'afilmory:ssg-prerender',
@@ -226,27 +306,49 @@ export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
         return
       }
       mainCss = undefined
-      mapJs = undefined
-      mapCss = undefined
-      photoJs = undefined
-      photoCss = undefined
+      mapJsFiles = []
+      mapCssFiles = []
+      photoJsFiles = []
+      photoCssFiles = []
 
-      for (const item of Object.values(bundle as unknown as BundleLike)) {
+      const typedBundle = bundle as unknown as BundleLike
+      const entryFileNames: string[] = []
+      let mapEntryFile: string | undefined
+      let photoEntryFile: string | undefined
+
+      for (const item of Object.values(typedBundle)) {
         if (item.type === 'asset') {
           if (/^assets\/index[.-].*\.css$/.test(item.fileName)) {
             mainCss = item.fileName
           }
           continue
         }
+        if (item.isEntry) {
+          entryFileNames.push(item.fileName)
+        }
         const facade = item.facadeModuleId?.replaceAll('\\', '/') ?? ''
         if (facade.endsWith('/pages/map/index.tsx')) {
-          mapJs = item.fileName
-          mapCss = Array.from(item.viteMetadata?.importedCss ?? []).find(f => f.endsWith('.css'))
+          mapEntryFile = item.fileName
         }
         else if (facade.endsWith('/pages/(main)/photos/[photoId]/index.tsx')) {
-          photoJs = item.fileName
-          photoCss = Array.from(item.viteMetadata?.importedCss ?? []).find(f => f.endsWith('.css'))
+          photoEntryFile = item.fileName
         }
+      }
+
+      const entryAssets = collectTransitiveStaticAssets(typedBundle, entryFileNames)
+      const entryJsSet = new Set(entryAssets.js)
+      const entryCssSet = new Set(entryAssets.css)
+
+      if (mapEntryFile) {
+        const mapAssets = collectTransitiveStaticAssets(typedBundle, [mapEntryFile])
+        mapJsFiles = mapAssets.js.filter(file => !entryJsSet.has(file))
+        mapCssFiles = mapAssets.css.filter(file => file !== mainCss && !entryCssSet.has(file))
+      }
+
+      if (photoEntryFile) {
+        const photoAssets = collectTransitiveStaticAssets(typedBundle, [photoEntryFile])
+        photoJsFiles = photoAssets.js.filter(file => !entryJsSet.has(file))
+        photoCssFiles = photoAssets.css.filter(file => file !== mainCss && !entryCssSet.has(file))
       }
     },
 
@@ -320,6 +422,12 @@ export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
             )
           }
         }
+        if (discoveredRoutes.includes('/map') && mapJsFiles.length === 0) {
+          throw new Error('[ssg-prerender] expected /pages/map/index.tsx chunk in bundle')
+        }
+        if (discoveredRoutes.includes('/photos/:photoId') && photoJsFiles.length === 0) {
+          throw new Error('[ssg-prerender] expected /pages/(main)/photos/[photoId]/index.tsx chunk in bundle')
+        }
 
         const indexHtmlPath = path.join(outDir, 'index.html')
         const baseIndexHtml = readFileSync(indexHtmlPath, 'utf8')
@@ -337,7 +445,7 @@ export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
         )
         writeFileSync(indexHtmlPath, homeHtml, 'utf8')
 
-        // 2) `/map` -> map.html（轻量玻璃态骨架屏 + noindex，复用共享 CSS + modulepreload）
+        // 2) `/map` -> map.html（轻量玻璃态骨架屏 + noindex，复用共享 CSS + 传递依赖 modulepreload）
         let mapTitleReplaced = false
         let mapHtml = injectRootHtml(subPageTemplate, '/map', await serverMod.renderRoute('/map')).replace(
           /<title>[\s\S]*?<\/title>/i,
@@ -350,16 +458,25 @@ export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
           throw new Error('[ssg-prerender] expected <title> not found for /map')
         }
         mapHtml = replaceMetaContent(mapHtml, 'name', 'robots', 'noindex', '/map').html
-        const mapHeadExtras = [
-          mapCss ? `<link rel="stylesheet" href="${escapeAttr(`${base}${mapCss}`)}">` : '',
-          mapJs ? `<link rel="modulepreload" crossorigin href="${escapeAttr(`${base}${mapJs}`)}">` : '',
-        ].join('')
-        mapHtml = injectHeadTags(mapHtml, mapHeadExtras)
+        const mapCssTags = mapCssFiles
+          .map(css => `<link rel="stylesheet" href="${escapeAttr(`${base}${css}`)}">`)
+          .join('')
+        const mapJsTags = mapJsFiles
+          .map(js => `<link rel="modulepreload" crossorigin href="${escapeAttr(`${base}${js}`)}">`)
+          .join('')
+        mapHtml = injectBeforeModuleScripts(mapHtml, mapCssTags)
+        mapHtml = injectHeadTags(mapHtml, mapJsTags)
         writeFileSync(path.join(outDir, 'map.html'), mapHtml, 'utf8')
 
         // 3) 所有单张照片 `/photos/<id>` -> dist/photos/<id>.html
         const photosOutDir = path.join(outDir, 'photos')
         mkdirSync(photosOutDir, { recursive: true })
+        const photoCssTags = photoCssFiles
+          .map(css => `<link rel="stylesheet" href="${escapeAttr(`${base}${css}`)}">`)
+          .join('')
+        const photoJsTags = photoJsFiles
+          .map(js => `<link rel="modulepreload" crossorigin href="${escapeAttr(`${base}${js}`)}">`)
+          .join('')
 
         let totalPhotoBytes = 0
         for (const photo of photos) {
@@ -410,14 +527,14 @@ export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
             )
           }
 
-          const headExtras = [
-            previewImageUrl
-              ? `<link rel="preload" as="image" fetchpriority="high" href="${escapeAttr(previewImageUrl)}">`
-              : '',
-            photoCss ? `<link rel="stylesheet" href="${escapeAttr(`${base}${photoCss}`)}">` : '',
-            photoJs ? `<link rel="modulepreload" crossorigin href="${escapeAttr(`${base}${photoJs}`)}">` : '',
-          ].join('')
-          photoHtml = injectHeadTags(photoHtml, headExtras)
+          if (previewImageUrl) {
+            photoHtml = injectAfterPreconnect(
+              photoHtml,
+              `<link rel="preload" as="image" fetchpriority="high" href="${escapeAttr(previewImageUrl)}">`,
+            )
+          }
+          photoHtml = injectBeforeModuleScripts(photoHtml, photoCssTags)
+          photoHtml = injectHeadTags(photoHtml, photoJsTags)
 
           const outFile = path.join(photosOutDir, `${photo.id}.html`)
           writeFileSync(outFile, photoHtml, 'utf8')

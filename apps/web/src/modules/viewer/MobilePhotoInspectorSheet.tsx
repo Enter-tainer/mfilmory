@@ -15,6 +15,7 @@ interface MobilePhotoInspectorSheetProps {
   exifData: PickedExif | null
   activeRegionId?: string | null
   isInteractive: boolean
+  isPreviewReady?: boolean
   progress: MotionValue<number>
   resolveHeight?: typeof resolveInspectorSheetHeight
   onClose: () => void
@@ -27,6 +28,7 @@ export const MobilePhotoInspectorSheet = ({
   exifData,
   activeRegionId,
   isInteractive,
+  isPreviewReady = true,
   progress,
   resolveHeight = resolveInspectorSheetHeight,
   onClose,
@@ -117,6 +119,7 @@ export const MobilePhotoInspectorSheet = ({
             exifData={exifData}
             activeRegionId={activeRegionId}
             onActiveRegionChange={onActiveRegionChange}
+            isPreviewReady={isPreviewReady}
             rootClassName="min-h-0 flex-1"
             viewportClassName="px-4 pb-[calc(env(safe-area-inset-bottom)+20px)] **:select-text"
           />

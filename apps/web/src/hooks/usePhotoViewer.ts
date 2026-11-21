@@ -7,6 +7,7 @@ import type { DateRangeFilter } from '~/atoms/app'
 import { gallerySettingAtom } from '~/atoms/app'
 import { setViewer, viewerAtom } from '~/atoms/viewer'
 import { jotaiStore } from '~/lib/jotai'
+import { prewarmPreviewImage, prewarmViewerRoute } from '~/lib/preview-prewarm'
 import { getPhotoDateMs, getRangeEndMs, getRangeStartMs } from '~/modules/gallery/dateRangeUtils'
 import { PhotosContext } from '~/providers/photos-provider'
 import type { PhotoManifest } from '~/types/photo'
@@ -205,6 +206,9 @@ export const usePhotoViewer = () => {
         triggerElement: element || null,
       }))
 
+      prewarmPreviewImage(photo.previewUrl || photo.thumbnailUrl, { priority: 'high' })
+      prewarmViewerRoute()
+
       // Navigate to photo URL (creates history entry)
       navigate(`/photos/${photo.id}${location.search}`)
 
@@ -250,6 +254,8 @@ export const usePhotoViewer = () => {
           ...prev,
           photoId: photo.id,
         }))
+
+        prewarmPreviewImage(photo.previewUrl || photo.thumbnailUrl, { priority: 'high' })
 
         // Create history entry for each photo navigation to support browser back/forward
         navigate(`/photos/${photo.id}${location.search}`)

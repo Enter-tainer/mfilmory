@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 
 interface ContainedImageFrameProps {
   width?: number
@@ -52,7 +52,7 @@ export const ContainedImageFrame = ({ width, height, className, children }: Cont
     })
   }, [height, width])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     updateImageFrame()
 
     const stage = stageRef.current

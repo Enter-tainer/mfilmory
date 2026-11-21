@@ -130,14 +130,19 @@ for (const slug of slugs) {
     opt.manifestScriptText)
   // 网格是虚拟化 + 渐进渲染的，同一份构建自己跑两次也会有抖动：
   //   gallery        87/86/86
-  //   deeplink       124/124/125（背后还有画廊网格在渲染）
+  //   deeplink       优化前 ~124（背后同时挂载画廊网格），优化后延迟挂载画廊，只剩查看器与底部胶片条
   //   /map           56/125/104（聚类动画）
   const imgDelta = Math.abs(base.imgCount - opt.imgCount)
   if (slug === 'map') {
     soft('渲染图片数与基线大致一致（聚类动画中间态，同构建自身 56→125）', true,
       `${base.imgCount} → ${opt.imgCount}`)
   }
-  else if (slug === 'gallery' || slug === 'filter-camera' || slug === 'deeplink') {
+  else if (slug === 'deeplink') {
+    hard('deeplink 不再挂载隐藏画廊网格（imgCount 显著下降且包含目标照片）',
+      opt.imgCount > 0 && opt.imgCount <= base.imgCount && opt.renderedIds.includes('20261104-LKXG5370'),
+      `${base.imgCount} → ${opt.imgCount}`)
+  }
+  else if (slug === 'gallery' || slug === 'filter-camera') {
     hard('渲染图片数与基线一致（虚拟化抖动允许 ±2）', imgDelta <= 2, `${base.imgCount} → ${opt.imgCount}`)
   }
   else {

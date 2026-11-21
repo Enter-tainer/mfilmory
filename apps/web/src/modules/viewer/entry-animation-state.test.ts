@@ -119,6 +119,16 @@ it('isThumbnailElementVisuallyReady treats a thumbnail with resolved dimensions 
     }),
     false,
   )
+
+  assert.equal(
+    isThumbnailElementVisuallyReady({
+      currentSrc: 'https://r2-gallery.996404.xyz/mgt-gallery/.afilmory/previews/2026-%E4%B8%9C%E4%BA%AC%E6%97%A5%E8%90%BD.avif',
+      naturalWidth: 1600,
+      src: 'https://r2-gallery.996404.xyz/mgt-gallery/.afilmory/previews/2026-%E4%B8%9C%E4%BA%AC%E6%97%A5%E8%90%BD.avif',
+      thumbnailSrc: 'https://r2-gallery.996404.xyz/mgt-gallery/.afilmory/previews/2026-东京日落.avif',
+    }),
+    true,
+  )
 })
 
 it('shouldHideCurrentViewerImage keeps the real current slide hidden only while the catch-up layer owns the handoff', () => {

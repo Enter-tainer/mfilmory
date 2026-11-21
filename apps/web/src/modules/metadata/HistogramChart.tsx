@@ -140,7 +140,8 @@ const createRenderer = (canvas: HTMLCanvasElement) => {
 export const HistogramChart: FC<{
   thumbnailUrl: string
   className?: string
-}> = ({ thumbnailUrl, className = '' }) => {
+  enabled?: boolean
+}> = ({ thumbnailUrl, className = '', enabled = true }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const previousHistogramRef = useRef<HistogramBins | null>(null)
   const animationRef = useRef<number | null>(null)
@@ -150,12 +151,20 @@ export const HistogramChart: FC<{
   const { t } = useTranslation()
 
   useEffect(() => {
+    if (!enabled) {
+      setLoading(true)
+      setError(false)
+      setHistogram(null)
+      return
+    }
+
     let cancelled = false
     setLoading(true)
     setError(false)
 
     const img = new Image()
     img.crossOrigin = 'Anonymous'
+    img.decoding = 'async'
     img.src = thumbnailUrl
 
     img.onload = () => {
@@ -206,7 +215,7 @@ export const HistogramChart: FC<{
       img.onload = null
       img.onerror = null
     }
-  }, [thumbnailUrl])
+  }, [enabled, thumbnailUrl])
 
   useEffect(() => {
     if (!histogram || !canvasRef.current) {
