@@ -173,7 +173,16 @@ pnpm build            # 把 manifest 外置成 photos-manifest.<hash>.json，产
 `.avif` 在 `SUPPORTED_FORMATS` 里，可以跟 JPEG 一样入库，实测能完整走完 EXIF / 影调分析 / blurhash / 缩略图 / 占位图 / OG 卡。已知限制：
 
 - **10-bit AVIF 可以解码**。当前 sharp 预编译版带着 libaom 3.15.1 的高位深解码，10-bit 文件（如仓库里那张 3888×5184 的测试图）能正常出缩略图和直方图。上游 issue #109 里「预编译 sharp 不支持 10-bit AVIF、需要自己编 libvips」的结论对现在这个版本**不再成立**，`node-gyp` 那套不用带回来。
-- **AVIF 原生 HDR gain map 不支持**。`isHDR` 只认 JPEG Ultra HDR 的三个标记（`MPImageType=Gain Map Image`、URN `urn:iso:std:iso:ts:21496:-1`、EXIF `ContainerDirectory` 里的 `GainMap` 项）。带 `tmap` 项的 AVIF 会被当作 SDR 处理，`isHDR` 为 `false`；阅览器侧的 gain map 渲染依赖上游尚未合并的 PR #300 / #301。
+- **AVIF 原生 HDR gain map（Ultra HDR）已支持**。`isHDR` 除了 JPEG Ultra HDR 的三个标记
+  （`MPImageType=Gain Map Image`、URN `urn:iso:std:iso:ts:21496:-1`、EXIF `ContainerDirectory`
+  里的 `GainMap` 项），还会读 AVIF 容器里的 `tmap` 派生项（`packages/builder/src/image/avif-color.ts`）；
+  阅览器侧按 `iref dimg` 取增益图、用 `parseISOGainMap()` 解 ISO 21496-1 元数据，再把增益图包成
+  独立迷你 AVIF 交给浏览器硬解（`packages/webgl-viewer/src/avif-gainmap.ts`）。
+  顺带修好了 nclx Display P3 源的缩略图 / 占位图 / 分享图偏灰：libvips 不解释 AVIF 的 `colr/nclx`，
+  产物会丢失色域标记，现在构建期通过 `pipelineColourspace('rgb16').withIccProfile('p3')`
+  在不转换像素的前提下把 P3 ICC 写入缩略图、占位图和 OG 分享图（详见
+  `docs/image-quality/avif-ultrahdr-2026-11.md`）。
+  不支持的部分：PQ / HLG 传递函数不做标记、缩略图仍是 SDR。
 - **JPEG XL 不支持**（上游 issue #250 的另一半仍未做）。
 - 多帧 / 动画 AVIF 没有处理，只会用第一帧。
 

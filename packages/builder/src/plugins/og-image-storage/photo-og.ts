@@ -2,7 +2,7 @@ import type { Buffer } from 'node:buffer'
 
 import sharp from 'sharp'
 
-import { resolveIccPreservation } from '../../image/color-profile.js'
+import { applyColorProfileStrategy, resolveColorProfileStrategy } from '../../image/color-profile.js'
 
 /**
  * 照片直放（photo-straight）分享图。
@@ -39,15 +39,16 @@ export const PHOTO_OG_WEBP_QUALITY = 88
  * 增量构建重渲染旧卡片，而不是继续复用旧图。
  *
  * v3：广色域源图保留 ICC Profile，卡片不再被裁到 sRGB（见 `image/color-profile.ts`）。
+ * v4：nclx Display P3 AVIF 源同样保留 P3 ICC Profile（不再在 WebP 里丢掉标记）。
  */
-export const PHOTO_OG_LAYOUT_VERSION = 'width-cap-1200-v3'
+export const PHOTO_OG_LAYOUT_VERSION = 'width-cap-1200-v4'
 
 export async function renderPhotoOgImage(input: Buffer): Promise<Buffer> {
-  const keepIcc = await resolveIccPreservation(input, false)
+  const colorStrategy = await resolveColorProfileStrategy(input, false)
   const pipeline = sharp(input, { limitInputPixels: false })
     .rotate()
     .resize({ width: PHOTO_OG_WIDTH, withoutEnlargement: true })
-  return await (keepIcc ? pipeline.keepIccProfile() : pipeline)
+  return await applyColorProfileStrategy(pipeline, colorStrategy)
     .webp({ quality: PHOTO_OG_WEBP_QUALITY, effort: 4 })
     .toBuffer()
 }

@@ -8,7 +8,7 @@ import sharp from 'sharp'
 import { getGlobalLoggers } from '../photo/logger-adapter.js'
 import { hardForceEncode, signatureMatches, writeSignature } from './asset-signature.js'
 import { resolveAvifBitdepth } from './avif-bitdepth.js'
-import { resolveIccPreservation } from './color-profile.js'
+import { applyColorProfileStrategy, resolveColorProfileStrategy } from './color-profile.js'
 
 /**
  * 阅览器占位图（preview）。
@@ -35,21 +35,21 @@ export const PREVIEW_QUALITY = 45
  * 带 alpha 的源图回退 8-bit（见 `resolveAvifBitdepth`）。
  */
 export const PREVIEW_BITDEPTH = 10
-/** 参数签名；入口门禁也用它判断「参数变没变」（文件名不随参数变化）。`-icc` 见 `color-profile.ts`。 */
-export const PREVIEW_SIGNATURE = `inside-${PREVIEW_SIZE}q${PREVIEW_QUALITY}e6b${PREVIEW_BITDEPTH}-icc.${PREVIEW_EXTENSION}`
+/** 参数签名；入口门禁也用它判断「参数变没变」（文件名不随参数变化）。`-icc` / `-cicp` 见 `color-profile.ts` 与 `avif-color.ts`。 */
+export const PREVIEW_SIGNATURE = `inside-${PREVIEW_SIZE}q${PREVIEW_QUALITY}e6b${PREVIEW_BITDEPTH}-icc-cicp.${PREVIEW_EXTENSION}`
 
 export async function encodePreviewBuffer(
   imageBuffer: Buffer,
   limitInputPixels?: number | boolean,
 ): Promise<Buffer> {
-  const [bitdepth, keepIcc] = await Promise.all([
+  const [bitdepth, colorStrategy] = await Promise.all([
     resolveAvifBitdepth(PREVIEW_BITDEPTH, imageBuffer, limitInputPixels),
-    resolveIccPreservation(imageBuffer, limitInputPixels),
+    resolveColorProfileStrategy(imageBuffer, limitInputPixels),
   ])
   const pipeline = sharp(imageBuffer, { limitInputPixels })
     .rotate()
     .resize({ width: PREVIEW_SIZE, height: PREVIEW_SIZE, fit: 'inside', withoutEnlargement: true })
-  return await (keepIcc ? pipeline.keepIccProfile() : pipeline)
+  return await applyColorProfileStrategy(pipeline, colorStrategy)
     .avif({ quality: PREVIEW_QUALITY, effort: 6, bitdepth })
     .toBuffer()
 }

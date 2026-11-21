@@ -1,4 +1,6 @@
 /// <reference lib="webworker" />
+import type { AVIFGainMap } from './avif-gainmap'
+import { extractAVIFGainMap, looksLikeAvif } from './avif-gainmap'
 import type { GainMapMetadata } from './jpeg-gainmap'
 import { extractJPEGGainMap } from './jpeg-gainmap'
 import type {
@@ -15,6 +17,8 @@ import { OVERVIEW_SIZE, TILE_GUTTER } from './webgpu-tiles'
 declare const self: DedicatedWorkerGlobalScope
 let base: ImageBitmap | undefined
 let gain: ImageBitmap | undefined
+
+type ExtractedGainMap = NonNullable<ReturnType<typeof extractJPEGGainMap>> | AVIFGainMap
 
 function post(message: TextureWorkerMessage, transfer: Transferable[] = []) {
   self.postMessage(message, transfer)
@@ -94,8 +98,8 @@ self.onmessage = async ({ data: request }: MessageEvent<TextureWorkerRequest>) =
       throw new Error(`Image fetch failed: ${response.status}`)
     }
     const blob = await response.blob()
-    const header = new Uint8Array(await blob.slice(0, 2).arrayBuffer())
-    let extracted: ReturnType<typeof extractJPEGGainMap> = null
+    const header = new Uint8Array(await blob.slice(0, 64).arrayBuffer())
+    let extracted: ExtractedGainMap | null = null
     let warning: string | undefined
     if (header[0] === 0xFF && header[1] === 0xD8) {
       try {
@@ -103,6 +107,14 @@ self.onmessage = async ({ data: request }: MessageEvent<TextureWorkerRequest>) =
       }
       catch (error) {
         warning = `HDR metadata could not be decoded: ${String(error)}`
+      }
+    }
+    else if (looksLikeAvif(header)) {
+      try {
+        extracted = extractAVIFGainMap(await blob.arrayBuffer())
+      }
+      catch (error) {
+        warning = `AVIF HDR metadata could not be decoded: ${String(error)}`
       }
     }
     base = await createImageBitmap(extracted?.base ?? blob)
