@@ -23,6 +23,8 @@ import { THUMBNAIL_BITDEPTH, THUMBNAIL_QUALITY, THUMBNAIL_WIDTH } from './thumbn
 export const MEDIA_FORMAT_VERSION = [
   `thumb${THUMBNAIL_WIDTH}q${THUMBNAIL_QUALITY}b${THUMBNAIL_BITDEPTH}`,
   `preview${PREVIEW_SIZE}q${PREVIEW_QUALITY}b${PREVIEW_BITDEPTH}`,
+  // 广色域原图保留 ICC（像素不再被裁到 sRGB）：产物内容变了，必须整批重编
+  'icc',
 ].join('-')
 
 const MARKER_PATH = path.join(workdir, 'src/data/.cache/media-format-version')

@@ -102,6 +102,27 @@ export class WebGLImageViewerEngine extends ImageViewerEngineBase {
     }
     this.gl = gl
 
+    // 画布与纹理解包都按 Display P3：广色域原图（Lightroom 导出的 P3 JPEG 等）不被压回 sRGB，
+    // 与 WebGPU 引擎的 `colorSpace: 'display-p3'` 对齐。
+    //
+    // 这两个属性必须成对设置：`texImage2D` 上传 ImageBitmap 时按 `unpackColorSpace` 换算，
+    // 而 `drawingBufferColorSpace` 只负责解释画布。只改后者的话，sRGB 图会以 sRGB 数值直接
+    // 塞进 P3 画布被拉过头（实测 sRGB 纯红读出 (255,0,0)，正确值应是 P3 的 (234,51,35)）；
+    // 只改前者则 P3 图仍会被压回 sRGB。两处一起设，sRGB / P3 源都能准确还原。
+    //
+    // 浏览器不认识这些属性时（旧 Chrome / Firefox）画布仍是 sRGB，行为与改动前一致。
+    try {
+      if ('drawingBufferColorSpace' in gl) {
+        gl.drawingBufferColorSpace = 'display-p3'
+      }
+      if ('unpackColorSpace' in gl) {
+        gl.unpackColorSpace = 'display-p3'
+      }
+    }
+    catch {
+      // 只读或未实现的实现忽略即可，保持默认 sRGB
+    }
+
     try {
       this.initializeViewport()
       this.initWebGL()

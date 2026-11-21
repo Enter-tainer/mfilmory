@@ -1,3 +1,4 @@
+import type { Buffer } from 'node:buffer'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -9,6 +10,7 @@ import { getGlobalLoggers } from '../photo/logger-adapter.js'
 import { hardForceEncode, signatureMatches, writeSignature } from './asset-signature.js'
 import { resolveAvifBitdepth } from './avif-bitdepth.js'
 import { generateBlurhash } from './blurhash.js'
+import { resolveIccPreservation } from './color-profile.js'
 
 // 常量定义
 const THUMBNAIL_DIR = path.join(workdir, 'public/thumbnails')
@@ -40,19 +42,24 @@ export const THUMBNAIL_WIDTH = 500
  * 参数签名：编码参数一变就会失配，从而触发重编码。
  * 入口门禁（`filterTaskImages`）也拿它当权威判据——只看「文件在不在」是不够的，
  * 换位深这类改动文件名不变，会静默复用旧产物。
+ * `-icc`：广色域原图保留 ICC（见 `color-profile.ts`），旧产物是被裁到 sRGB 的。
  */
-export const THUMBNAIL_SIGNATURE = `${THUMBNAIL_WIDTH}q${THUMBNAIL_QUALITY}e6b${THUMBNAIL_BITDEPTH}.${THUMBNAIL_EXTENSION}`
+export const THUMBNAIL_SIGNATURE = `${THUMBNAIL_WIDTH}q${THUMBNAIL_QUALITY}e6b${THUMBNAIL_BITDEPTH}-icc.${THUMBNAIL_EXTENSION}`
 
 export async function encodeThumbnailBuffer(
   imageBuffer: Buffer,
   limitInputPixels?: number | boolean,
 ): Promise<Buffer> {
-  const bitdepth = await resolveAvifBitdepth(THUMBNAIL_BITDEPTH, imageBuffer, limitInputPixels)
-  return await sharp(imageBuffer, { limitInputPixels })
+  const [bitdepth, keepIcc] = await Promise.all([
+    resolveAvifBitdepth(THUMBNAIL_BITDEPTH, imageBuffer, limitInputPixels),
+    resolveIccPreservation(imageBuffer, limitInputPixels),
+  ])
+  const pipeline = sharp(imageBuffer, { limitInputPixels })
     .rotate()
     .resize(THUMBNAIL_WIDTH, null, {
       withoutEnlargement: true,
     })
+  return await (keepIcc ? pipeline.keepIccProfile() : pipeline)
     .avif({ quality: THUMBNAIL_QUALITY, effort: 6, bitdepth })
     .toBuffer()
 }
