@@ -33,6 +33,8 @@
 | `site-config-inject.ts` | 注入 `window.__SITE_CONFIG__`（`site.config.ts` + `config.json`） |
 | `photos-static.ts` | 静态站的照片数据 / 路由辅助 |
 | `og-image-plugin.ts` | 构建期生成站点分享图（一张满幅照片）+ 全部 favicon（`logo.jpg` + `sharp`），并写 og/twitter meta |
+| `inline-main-css.ts` | 把主 CSS 内联进首页 `index.html` 消除 render-blocking RTT，并在逐路由 SSG 时保留 `assets/index-*.css` 供子页面外链复用 |
+| `ssg-prerender.ts` | 在 `closeBundle` 用 `src/entry-server.tsx` 对 `/`、`/map`、`/manifest` 与全部 `/photos/<id>.html` 做逐路由 React SSG 预渲染，并调用 `buildPhotoOgText` 为每张照片写入独立 `<title>` 与 OG meta；客户端由 `hydrateRoot` 水合 |
 | `feed-sitemap.ts` | 生成 `feed.xml` / `sitemap.xml` |
 | `locales-json.ts` | 把 `locales/app/*.json` 的扁平点号 key 展开成嵌套对象（Windows 路径比较已修） |
 | `i18n-hmr.ts` / `locales.ts` | 文案热更新辅助（`locales.ts` 是死代码，上游如此） |
@@ -45,11 +47,11 @@
 - `thumbnail-storage/`：缩略图上传
 - `geocoding.js`：照片地点反查（`geocodingPlugin`）
 - `github-repo-sync.js`：把 manifest / 缩略图写回 GitHub 仓库
-- `og-image-storage/`：**分享图插件**。卡片就是照片本身（按原图比例、横边上限 1200 的 WebP，不裁切、**不画**黑底/站名/标题），文字交给分享平台原生渲染。其中 `vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk` 就是 **Cloudflare Pages 中间件**，负责两件事：① 拦截 `/photos/:slug` 的 HTML，把 `og:image` / `twitter:image` 重写到 R2 上的 `.afilmory/og-images/*.webp`，并按 manifest 注入每张照片的 `og:title` / `og:description`（多行 `📸 / 📝 / 📅 / 🗺 / 📍` EXIF 明细）、`<title>` 和单行 `meta[name=description]`；② 把分享弹窗用的站内路径 `/og/:photoId` **302** 到同一张 R2 WebP（运行时 manifest 裁掉了 `ogImageUrl`，这样既不用下发给浏览器、也不会让图片破图）
+- `og-image-storage/`：**分享图插件**。卡片就是照片本身（按原图比例、横边上限 1200 的 WebP，不裁切、**不画**黑底/站名/标题），文字交给分享平台原生渲染。每张照片页 `/photos/:id` 的 `og:image` / `twitter:image` / `og:title` / `og:description`（多行 `📸 / 📝 / 📅 / 🗺 / 📍` EXIF 明细）、`<title>` 和单行 `meta[name=description]` 已在构建期由 `ssg-prerender.ts` 调用 `photo-text.ts` 直接写进静态 `photos/<id>.html`，无需边缘 Worker 改写；`vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk` 生成的 **Cloudflare Pages 中间件**只负责把分享弹窗用的站内路径 `/og/:photoId` **302** 到 R2 上的 `.afilmory/og-images/*.webp`（运行时 manifest 裁掉了 `ogImageUrl`，这样既不用下发给浏览器、也不会让图片破图）
   - 文案规则在 `packages/builder/src/plugins/og-image-storage/photo-text.ts`；照片直放（裁切/缩放）在 `photo-og.ts`
   - 产物写到仓库根 `functions/_middleware.ts`，由 `builder.config.ts` 里的 `ogImagePlugin({ vendor: { type: 'cloudflare-middleware', storageURL } })` 触发
-  - 该文件是**构建产物，不提交**（`.gitignore` 只忽略这精确一个路径）；内容由 `config.json` 的 `url` + `builder.config.ts` 的 `storageURL`（通常即 `.env` 的 `S3_CUSTOM_DOMAIN`）决定。`pnpm build` 会自动生成，也可以用 `pnpm og:middleware` 单独重生成（`-- --check` 校验磁盘上的文件是否最新，**并校验中间件处理的路径（`/photos/*`、`/og/*`）都写进了 `_routes.json` 的 include**；`--storage-url=…` 临时覆盖 CDN 地址）
-  - 部署到 Cloudflare Pages 时 **project root 必须是仓库根**（或显式 `--functions-directory`），否则 `functions/` 不会被带上，OG 改写就失效
+  - 该文件是**构建产物，不提交**（`.gitignore` 只忽略这精确一个路径）；内容由 `config.json` 的 `url` + `builder.config.ts` 的 `storageURL`（通常即 `.env` 的 `S3_CUSTOM_DOMAIN`）决定。`pnpm build` 会自动生成，也可以用 `pnpm og:middleware` 单独重生成（`-- --check` 校验磁盘上的文件是否最新，**并校验中间件处理的路径都写进了 `_routes.json` 的 include**；`--storage-url=…` 临时覆盖 CDN 地址）
+  - 部署到 Cloudflare Pages 时 **project root 必须是仓库根**（或显式 `--functions-directory`），否则 `functions/` 不会被带上，`/og/:photoId` 跳转会失效
   - 卡片长什么样（旧卡片 vs 照片直放、三端原生渲染、不同构图、首页卡片）：`docs/og/photo-straight-cards.webp`
 
 **3. 根级本地 ESLint 插件** — `plugins/eslint/`（i18n JSON 校验、no-debug、package.json 校验、递归排序），由 `eslint.config.mjs` 加载。
@@ -200,22 +202,20 @@ pnpm lint            # eslint --fix
 设 `AFILMORY_EMBED_MANIFEST=true` 可切回「整份内联进 HTML」的老行为（`pnpm dev` 默认内联）。
 静态资源的缓存头在 `apps/web/public/_headers`（Cloudflare Pages 格式），带 hash 的资源一年 immutable。
 
-**Pages Function 的调用范围由 `_routes.json` 控制，别让它吞掉整站**：
+**Pages Function 的调用范围由 `_routes.json` 控制，别让它吞掉静态页面**：
 
-- `apps/web/public/_routes.json` 只把 `/photos/*` 与 `/og/*` 交给 Pages Function（OG 中间件 + 分享图跳转）。
-  旧配置写的是 `"include": ["/*"]`，于是**每条** HTML 请求都会进 Function、响应 `cf-cache-status` 恒为 `DYNAMIC`。
-  收窄之后其余路径由静态资源处理器直接响应（SPA 回退不依赖 Function：没有顶层 `404.html` 时
-  Pages 对未命中的路径本来就回 `/`）。新增需要 Function 的路径时必须同时加进这个 include 列表，
-  否则请求会落到静态资源/SPA 回退（`/og/*` 就是这么坏过一个版本的：返回 200 text/html，图片永远破图）。
+- `apps/web/public/_routes.json` 只把 `/og/*` 交给 Pages Function（分享图 302 跳转）。
+  `/`、`/map`、`/manifest` 与全部 `/photos/<id>` 已在构建期通过 Vite SSG 生成静态 `.html` 文件，
+  直接由静态资源 CDN 返回、可配合 `_headers` 做 `public, max-age=0, must-revalidate` + ETag 304 验证，
+  不会触发 Worker/Function 调用（旧方案把 `/photos/*` 也放进 Function，导致每张照片页恒为 `DYNAMIC` 无法缓存）。
+  新增需要 Function 的路径时必须同时加进这个 include 列表，否则请求会落到静态资源/SPA 回退
+  （`/og/*` 就是这么坏过一个版本的：返回 200 text/html，图片永远破图）。
 - **`exclude` 键必须存在，哪怕是空数组**。`wrangler pages deploy` 会按
   `{ version, include: string[], exclude: string[] }` 校验，只写 `include` 会直接让部署失败并报
   `Invalid _routes.json file found`。所以正确写法是
-  `{"version": 1, "include": ["/photos/*", "/og/*"], "exclude": []}`。
-- **`_headers` 不作用于 Pages Function 生成的响应**，所以 `/photos/*` 的缓存头只能在中间件里给
-  Response 加；写在 `_headers` 里对它无效。
-- `_headers` 按**请求 URL** 匹配，`/` 这条规则只覆盖根路径，`/map`、`/photos/:id` 这类 SPA 深链
-  拿不到它。想让深链也命中边缘缓存得按路由逐条写（`/*` 还会和 `/assets/*` 的 immutable 逗号拼接成
-  冲突指令，官方专门警告过），收益与风险都不划算，所以 **HTML 仍保持 `max-age=0, must-revalidate`**。
+  `{"version": 1, "include": ["/og/*"], "exclude": []}`。
+- `_headers` 按**请求 URL** 匹配，已为 `/`、`/photos/*`、`/map`、`/manifest` 分别声明 `max-age=0, must-revalidate`，
+  `/assets/*`、`/vendor/*`、`/fonts/*` 为一年 immutable。
 - 以后若要给 HTML 加共享缓存，注意 `s-maxage` 会**禁用** `stale-while-revalidate`（RFC 语义：
   s-maxage 隐含 proxy-revalidate），且 `max-age=0` + SWR 允许浏览器 24h 内先渲染旧 HTML——
   旧 HTML 引用的 hashed chunk 在新部署后可能已不存在，会白屏。
@@ -254,7 +254,7 @@ pnpx wrangler pages deploy apps/web/dist --project-name mgt-afilmory --branch ma
   # 期望：302  https://r2-gallery.996404.xyz/mgt-gallery/.afilmory/og-images/<photoId>.webp
   ```
 
-- 本地要验证「OG meta 改写 / 分享预览图跳转」必须在 **Pages 运行时**里跑，`pnpm preview`（纯静态 serve）没有 Functions，`/photos/*` 的 meta 不会被改写、`/og/*` 仍是 404：
+- 本地要验证「分享预览图跳转（`/og/*` 302）」必须在 **Pages 运行时**里跑，`pnpm preview`（纯静态 serve）没有 Functions，`/og/*` 仍是 404（`/photos/*` 的 OG meta 已在静态 `.html` 内，无需 Functions）：
 
   ```powershell
   pnpm --filter @afilmory/web exec vite build

@@ -12,8 +12,10 @@ declare global {
     router: typeof router
   }
 }
-window.router = {
-  navigate() {},
+if (typeof window !== 'undefined') {
+  window.router = {
+    navigate() {},
+  }
 }
 
 /**

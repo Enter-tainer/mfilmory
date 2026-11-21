@@ -28,6 +28,7 @@ import { manifestInjectPlugin } from './plugins/vite/manifest-inject'
 import { ogImagePlugin } from './plugins/vite/og-image-plugin'
 import { photosStaticPlugin } from './plugins/vite/photos-static'
 import { siteConfigInjectPlugin } from './plugins/vite/site-config-inject'
+import { ssgPrerenderPlugin } from './plugins/vite/ssg-prerender'
 
 const devPrint = (): PluginOption => ({
   name: 'dev-print',
@@ -125,6 +126,7 @@ const staticWebBuildPlugins: PluginOption[] = [
     siteUrl: siteConfig.url,
   }),
   createFeedSitemapPlugin(siteConfig),
+  ssgPrerenderPlugin(siteConfig),
   createHtmlPlugin({
     minify: {
       collapseWhitespace: true,
@@ -155,9 +157,17 @@ const staticWebBuildPlugins: PluginOption[] = [
 const BUILD_FOR_SERVER_SERVE = process.env.BUILD_FOR_SERVER_SERVE === '1'
 // https://vitejs.dev/config/
 export default defineConfig(() => {
+  const IS_SSR_BUILD = process.env.AFILMORY_SSR_BUILD === '1'
   return {
     base: BUILD_FOR_SERVER_SERVE ? '/static/web/' : '/',
     assetsInclude: ['**/*.wasm'],
+    ...(IS_SSR_BUILD
+      ? {
+          ssr: {
+            noExternal: true,
+          },
+        }
+      : {}),
     build: {
       rollupOptions: BUILD_FOR_SERVER_SERVE
         ? {
@@ -168,7 +178,8 @@ export default defineConfig(() => {
         : undefined,
     },
     plugins: [
-      codeInspectorPlugin({
+      !IS_SSR_BUILD
+      && codeInspectorPlugin({
         bundler: 'vite',
         hotKeys: ['altKey'],
       }),
@@ -180,25 +191,27 @@ export default defineConfig(() => {
 
       astPlugin,
       tsconfigPaths(),
-      checker({
+      !IS_SSR_BUILD
+      && checker({
         typescript: true,
         enableBuild: true,
         root: __dirname,
       }),
 
       ...routeGenPlugins,
-      createDependencyChunksPlugin([
+      !IS_SSR_BUILD
+      && createDependencyChunksPlugin([
         ['heic-to'],
         ['react', 'react-dom'],
         ['i18next', 'i18next-browser-languagedetector', 'react-i18next'],
       ]),
       localesJsonPlugin(),
-      tailwindcss(),
-      ...(BUILD_FOR_SERVER_SERVE ? [] : staticWebBuildPlugins),
-      process.env.analyzer && analyzer(),
+      !IS_SSR_BUILD && tailwindcss(),
+      ...(BUILD_FOR_SERVER_SERVE || IS_SSR_BUILD ? [] : staticWebBuildPlugins),
+      !IS_SSR_BUILD && process.env.analyzer && analyzer(),
 
       devPrint(),
-    ],
+    ].filter(Boolean),
     server: {
       port: !DEV_NEXT_JS ? 1924 : 13333, // 1924 年首款 35mm 相机问世
     },

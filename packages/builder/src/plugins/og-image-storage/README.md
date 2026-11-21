@@ -4,8 +4,10 @@
 
 卡片**只有照片**：把 2560px 的阅览器占位图按原图比例缩放成 WebP 上传到存储，没有黑底、边框、站名，也不画标题和 EXIF。
 **横边上限 1200**（>1200 缩到 1200，≤1200 保持原尺寸不放大），纵边按比例，不裁切。
-卡片上的文字全部交给分享平台从页面 meta 原生渲染，所以每张照片页的 `og:title` / `og:description` / `<title>` 由
-Cloudflare 中间件在边缘按 manifest 注入（SPA 每张照片返回的是同一份 `index.html`）。
+卡片上的文字全部交给分享平台从页面 meta 原生渲染，所以每张照片页的 `og:image` / `twitter:image` /
+`og:title` / `og:description` / `<title>` / `meta[name=description]` 在 Vite 生产构建期由
+`apps/web/plugins/vite/ssg-prerender.ts` 直接调用 `photo-text.ts`（`buildPhotoOgText`）写入各自的静态
+`photos/<id>.html`，无需经过 Cloudflare 中间件，使 `/photos/*` 可直接走静态 CDN 缓存。
 
 ## 卡片长什么样
 
@@ -69,21 +71,15 @@ pnpm build:manifest -- --force-manifest
 
 ```bash
 pnpm og:middleware                 # 用 .env 里的 S3_CUSTOM_DOMAIN 作 storageURL
-pnpm og:middleware -- --check      # 校验磁盘文件是否最新
+pnpm og:middleware -- --check      # 校验磁盘文件是否最新，并核对 _routes.json 的 include
 ```
 
-它做四件事（都只针对 `/photos/:slug` 的 HTML 响应）：
-
-1. 把站点级卡片的 `og:image` / `twitter:image` 换成该照片在 R2 的分享图；
-2. 注入 `og:title` / `twitter:title`、`og:description` / `twitter:description`；
-3. 把 `meta[name=description]` 换成单行摘要，`<title>` 换成 `{标题} | {站名}`；
-4. 把 `og:url` / `twitter:url` 换成本页 URL。
-
-整库文案表在构建期内嵌进中间件（`PHOTO_TEXT`，369 张约 55KB），所以边缘函数不需要额外请求。
-manifest 读不到时只换图、文字保持站点级，不会让中间件报错。
+`/photos/:id` 的 meta 已由 `ssg-prerender.ts` 在静态 `photos/<id>.html` 中内嵌，因此该中间件目前**只处理
+`/og/:photoId`**（分享弹窗用）：把 `/og/:photoId` **302** 重定向到 R2 的 `.afilmory/og-images/<photoId>.webp`
+（运行时 manifest 裁掉了 `ogImageUrl`，靠这个跳转拿图），不再对 `/photos/*` 运行 `HTMLRewriter` 或内嵌整库文案表。
 
 部署到 Cloudflare Pages 时 **project root 必须是仓库根**（或显式 `--functions-directory`），
-否则 `functions/` 不会被带上，改写就失效。
+否则 `functions/` 不会被带上，`/og/:photoId` 跳转会失效。
 
 ## 配置
 

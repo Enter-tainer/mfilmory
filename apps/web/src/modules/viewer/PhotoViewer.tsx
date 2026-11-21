@@ -17,7 +17,7 @@ import {
 } from '@afilmory/viewer-motion'
 import { PanelRightOpen } from 'lucide-react'
 import { AnimatePresence, m } from 'motion/react'
-import { Fragment, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Swiper as SwiperType } from 'swiper'
 import { Navigation, Virtual } from 'swiper/modules'
@@ -27,6 +27,7 @@ import { useMediaQuery } from 'usehooks-ts'
 import { siteConfig } from '~/config'
 import { useMobile } from '~/hooks/useMobile'
 import { deriveAccentFromSources } from '~/lib/color'
+import { useIsClient } from '~/lib/ssr'
 import type { LoadingIndicatorRef } from '~/modules/inspector/LoadingIndicator'
 import { LoadingIndicator } from '~/modules/inspector/LoadingIndicator'
 import { ExifPanel } from '~/modules/metadata/ExifPanel'
@@ -69,8 +70,9 @@ export const PhotoViewer = ({
   onExitComplete,
 }: PhotoViewerProps) => {
   const { t } = useTranslation()
+  const isClient = useIsClient()
   const isMobile = useMobile()
-  const canHoverRegions = useMediaQuery('(hover: hover) and (pointer: fine)')
+  const canHoverRegions = useMediaQuery('(hover: hover) and (pointer: fine)', { initializeWithValue: false })
   const swiperRef = useRef<SwiperType | null>(null)
   const [isImageZoomed, setIsImageZoomed] = useState(false)
   const [isCurrentImageVisualReady, setIsCurrentImageVisualReady] = useState(false)
@@ -572,7 +574,17 @@ export const PhotoViewer = ({
                         </div>
                       )}
 
-                      {shouldMountImageStage ? (
+                      {!isClient ? (
+                        <div className="relative flex h-full w-full items-center justify-center">
+                          <img
+                            src={currentPhoto.previewUrl || currentPhoto.thumbnailUrl || currentPhoto.originalUrl}
+                            alt={currentPhoto.title}
+                            fetchPriority="high"
+                            decoding="async"
+                            className="h-full w-full object-contain"
+                          />
+                        </div>
+                      ) : shouldMountImageStage ? (
                         <Swiper
                           modules={[Navigation, Virtual]}
                           spaceBetween={0}
@@ -716,46 +728,43 @@ export const PhotoViewer = ({
                     style={isMobile ? { opacity: thumbnailsOpacity, y: thumbnailsY } : undefined}
                     className={isMobile && isInspectorVisible ? 'pointer-events-none' : undefined}
                   >
-                    <Suspense>
-                      <GalleryThumbnail
-                        currentIndex={currentIndex}
-                        photos={photos}
-                        onIndexChange={onIndexChange}
-                        visible={isViewerContentVisible}
-                        disableEntryTransition={disableEntryTransition}
-                      />
-                    </Suspense>
+                    <GalleryThumbnail
+                      currentIndex={currentIndex}
+                      photos={photos}
+                      onIndexChange={onIndexChange}
+                      visible={isViewerContentVisible}
+                      disableEntryTransition={disableEntryTransition}
+                    />
                   </m.div>
                 </m.div>
               </div>
 
               {/* EXIF 面板 - 根据设备与折叠状态展示 */}
-              <Suspense>
-                {isMobile ? (
-                  <MobilePhotoInspectorSheet
-                    createPresentation={createInspectorSheetPresentation}
+              {isMobile ? (
+                <MobilePhotoInspectorSheet
+                  createPresentation={createInspectorSheetPresentation}
+                  currentPhoto={currentPhoto}
+                  exifData={currentPhoto.exif}
+                  activeRegionId={activeRegionId}
+                  isInteractive={isMobileInspectorVisible}
+                  progress={inspectorProgress}
+                  resolveHeight={resolveInspectorSheetHeight}
+                  onClose={closeInspector}
+                  onActiveRegionChange={setActiveRegionId}
+                />
+              ) : (
+                isInspectorVisible && (
+                  <ExifPanel
                     currentPhoto={currentPhoto}
                     exifData={currentPhoto.exif}
                     activeRegionId={activeRegionId}
-                    isInteractive={isMobileInspectorVisible}
-                    progress={inspectorProgress}
-                    resolveHeight={resolveInspectorSheetHeight}
-                    onClose={closeInspector}
+                    visible={isInspectorVisible && isViewerContentVisible}
+                    disableEntryTransition={disableEntryTransition}
+                    onClose={() => setIsDesktopInspectorVisible(false)}
                     onActiveRegionChange={setActiveRegionId}
                   />
-                ) : (
-                  isInspectorVisible && (
-                    <ExifPanel
-                      currentPhoto={currentPhoto}
-                      exifData={currentPhoto.exif}
-                      activeRegionId={activeRegionId}
-                      visible={isInspectorVisible && isViewerContentVisible}
-                      onClose={() => setIsDesktopInspectorVisible(false)}
-                      onActiveRegionChange={setActiveRegionId}
-                    />
-                  )
-                )}
-              </Suspense>
+                )
+              )}
             </div>
           </m.div>
         )}

@@ -4,9 +4,11 @@ import { siteConfig } from '~/config'
 
 const titleTemplate = `%s | ${siteConfig.name}`
 export const useTitle = (title?: Nullable<string>) => {
-  const currentTitleRef = useRef(document.title)
+  const currentTitleRef = useRef(typeof document !== 'undefined' ? document.title : '')
   useEffect(() => {
-    if (!title) return
+    if (!title) {
+      return
+    }
 
     document.title = titleTemplate.replace('%s', title)
     return () => {

@@ -8,6 +8,7 @@ import { getViewer, setViewer } from '~/atoms/viewer'
 import { siteConfig } from '~/config'
 import { useMobile } from '~/hooks/useMobile'
 import { usePhotos } from '~/hooks/usePhotoViewer'
+import { useIsClient } from '~/lib/ssr'
 import { normalizeDateRange } from '~/modules/gallery/dateRangeUtils'
 import { PhotosRoot } from '~/modules/gallery/PhotosRoot'
 import { PhotosProvider } from '~/providers/photos-provider'
@@ -17,8 +18,11 @@ export const Component = () => {
   useSyncViewerWithUrl()
   useSyncViewerCloseShortcut()
 
+  const isClient = useIsClient()
+  const location = useLocation()
   const isMobile = useMobile()
   const photos = usePhotos()
+  const shouldRenderGallery = isClient || !location.pathname.startsWith('/photos/')
 
   return (
     <>
@@ -37,15 +41,16 @@ export const Component = () => {
           />
         )}
 
-        {isMobile ? (
-          <ScrollElementContext value={document.body}>
-            <PhotosRoot />
-          </ScrollElementContext>
-        ) : (
-          <ScrollArea rootClassName="h-svh w-full" viewportClassName="size-full" scrollbarClassName="mt-12">
-            <PhotosRoot />
-          </ScrollArea>
-        )}
+        {shouldRenderGallery
+          && (isMobile ? (
+            <ScrollElementContext value={typeof document !== 'undefined' ? document.body : null}>
+              <PhotosRoot />
+            </ScrollElementContext>
+          ) : (
+            <ScrollArea rootClassName="h-svh w-full" viewportClassName="size-full" scrollbarClassName="mt-12">
+              <PhotosRoot />
+            </ScrollArea>
+          ))}
 
         <Outlet />
       </PhotosProvider>

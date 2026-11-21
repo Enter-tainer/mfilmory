@@ -3,9 +3,17 @@ import { lazy, Suspense } from 'react'
 import { ErrorBoundary } from 'react-error-boundary'
 import { useTranslation } from 'react-i18next'
 
+import { useIsClient } from '~/lib/ssr'
+
 const MapSection = lazy(() => import('~/modules/map/MapSection').then(m => ({ default: m.MapSection })))
 
 export const Component = () => {
+  const isClient = useIsClient()
+
+  if (!isClient) {
+    return <ExploryPageSkeleton />
+  }
+
   return (
     <Suspense fallback={<ExploryPageSkeleton />}>
       <ErrorBoundary fallback={<ExploryPageError />}>
@@ -21,14 +29,14 @@ const ExploryPageSkeleton = () => {
   return (
     <m.div
       className="flex h-full w-full items-center justify-center"
-      initial={{ opacity: 0, y: 10 }}
+      initial={false}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, delay: 0.1 }}
     >
       <div className="text-center">
         <m.div
           className="mb-4 text-4xl"
-          initial={{ scale: 0.8, opacity: 0 }}
+          initial={false}
           animate={{ scale: 1, opacity: 1 }}
           transition={{ duration: 0.4, delay: 0.2 }}
         >
@@ -36,7 +44,7 @@ const ExploryPageSkeleton = () => {
         </m.div>
         <m.div
           className="text-lg font-medium text-gray-900 dark:text-gray-100"
-          initial={{ opacity: 0, y: 5 }}
+          initial={false}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3, delay: 0.3 }}
         >
@@ -44,7 +52,7 @@ const ExploryPageSkeleton = () => {
         </m.div>
         <m.p
           className="text-sm text-gray-600 dark:text-gray-400"
-          initial={{ opacity: 0, y: 5 }}
+          initial={false}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3, delay: 0.4 }}
         >

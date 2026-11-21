@@ -6,6 +6,7 @@ import { initReactI18next } from 'react-i18next'
 
 import { currentSupportedLanguages, defaultNS, ns } from './@types/constants'
 import { jotaiStore } from './lib/jotai'
+import { SSR_DEFAULT_LNG } from './lib/ssr'
 
 const localeLoaders: Record<string, () => Promise<{ default: Record<string, unknown> }>> = {
   'en': () => import('@locales/app/en.json'),
@@ -39,12 +40,88 @@ const localeBackend: BackendModule = {
   },
 }
 
+function matchSupportedLanguage(raw: string | null | undefined): string | null {
+  if (!raw) {
+    return null
+  }
+  const trimmed = raw.trim()
+  if (currentSupportedLanguages.includes(trimmed)) {
+    return trimmed
+  }
+  const lower = trimmed.toLowerCase()
+  const exactCi = currentSupportedLanguages.find(lng => lng.toLowerCase() === lower)
+  if (exactCi) {
+    return exactCi
+  }
+  if (lower === 'ja' || lower.startsWith('ja-')) {
+    return 'jp'
+  }
+  if (lower.startsWith('zh-hk')) {
+    return 'zh-HK'
+  }
+  if (lower.startsWith('zh-tw') || lower.startsWith('zh-hant')) {
+    return 'zh-TW'
+  }
+  if (lower.startsWith('zh')) {
+    return 'zh-CN'
+  }
+  if (lower.startsWith('ko')) {
+    return 'ko'
+  }
+  if (lower.startsWith('en')) {
+    return 'en'
+  }
+  return null
+}
+
+export function detectPreferredLanguage(): string {
+  if (typeof window === 'undefined') {
+    return SSR_DEFAULT_LNG
+  }
+  const params = new URLSearchParams(window.location.search)
+  const fromQuery = matchSupportedLanguage(params.get('lng'))
+  if (fromQuery) {
+    return fromQuery
+  }
+
+  try {
+    const fromStorage = matchSupportedLanguage(window.localStorage.getItem('i18nextLng'))
+    if (fromStorage) {
+      return fromStorage
+    }
+  }
+  catch {
+    // ignore storage restrictions
+  }
+
+  if (typeof navigator !== 'undefined') {
+    const candidates = navigator.languages?.length ? navigator.languages : [navigator.language]
+    for (const candidate of candidates) {
+      const matched = matchSupportedLanguage(candidate)
+      if (matched) {
+        return matched
+      }
+    }
+  }
+
+  return SSR_DEFAULT_LNG
+}
+
 const i18n = i18next.createInstance()
-export const i18nReady = i18n
-  .use(localeBackend)
-  .use(LanguageDetector)
-  .use(initReactI18next)
-  .init({
+let initPromise: Promise<unknown> | null = null
+
+export function initClientI18n(options?: { ssrLng?: string }): Promise<unknown> {
+  if (initPromise) {
+    return initPromise
+  }
+
+  const instance = i18n.use(localeBackend)
+  if (!options?.ssrLng && typeof window !== 'undefined') {
+    instance.use(LanguageDetector)
+  }
+
+  initPromise = instance.use(initReactI18next).init({
+    ...(options?.ssrLng ? { lng: options.ssrLng } : {}),
     fallbackLng: {
       default: ['en'],
     },
@@ -54,12 +131,19 @@ export const i18nReady = i18n
     interpolation: {
       escapeValue: false,
     },
-    detection: {
-      order: ['querystring', 'localStorage', 'navigator', 'htmlTag'],
-      caches: ['localStorage'],
-    },
+    ...(options?.ssrLng
+      ? {}
+      : {
+          detection: {
+            order: ['querystring', 'localStorage', 'navigator', 'htmlTag'],
+            caches: ['localStorage'],
+          },
+        }),
     returnNull: false,
   })
+
+  return initPromise
+}
 
 export { i18n }
 

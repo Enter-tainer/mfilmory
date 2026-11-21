@@ -50,11 +50,13 @@ export const PageHeaderRight = () => {
 
         {/* Desktop only: Map Link */}
         {!isMobile && (
-          <ActionIconButton
-            icon="i-mingcute-map-pin-line"
-            title={t('action.map.explore')}
-            onClick={() => navigate('/map')}
-          />
+          <div className="hidden lg:flex">
+            <ActionIconButton
+              icon="i-mingcute-map-pin-line"
+              title={t('action.map.explore')}
+              onClick={() => navigate('/map')}
+            />
+          </div>
         )}
 
         {isMobile ? (

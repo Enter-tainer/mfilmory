@@ -1,13 +1,18 @@
 import { useAtomValue } from 'jotai'
+import type { RenderComponentProps } from 'masonic'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { gallerySettingAtom } from '~/atoms/app'
 import { useMobile } from '~/hooks/useMobile'
+import { useIsClient } from '~/lib/ssr'
 import type { PhotoManifest } from '~/types/photo'
 
 import type { MasonryRef } from './Masonic'
 import { Masonry } from './Masonic'
 import { MasonryPhotoItem } from './MasonryPhotoItem'
+
+const SSR_GRID_PHOTO_COUNT = 36
+const SSR_EAGER_IMAGE_COUNT = 4
 
 const COLUMN_WIDTH_CONFIG = {
   auto: {
@@ -31,8 +36,9 @@ interface MasonryViewProps {
 }
 
 export const MasonryView = ({ photos, onRender }: MasonryViewProps) => {
+  const isClient = useIsClient()
   const { columns } = useAtomValue(gallerySettingAtom)
-  const [containerWidth, setContainerWidth] = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 0))
+  const [containerWidth, setContainerWidth] = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1440))
   const masonryRef = useRef<MasonryRef>(null)
   const isMobile = useMobile()
 
@@ -80,16 +86,21 @@ export const MasonryView = ({ photos, onRender }: MasonryViewProps) => {
     return Math.max(Math.min(calculatedWidth, maxWidth), minWidth)
   }, [isMobile, columns, containerWidth])
 
+  const renderMasonryItem = useCallback(
+    (props: RenderComponentProps<PhotoManifest>) => <MasonryItem {...props} />,
+    [],
+  )
+  const getItemKey = useCallback((data: PhotoManifest) => data.id, [])
+
+  if (!isClient) {
+    return <SsrPhotoGrid photos={photos.slice(0, SSR_GRID_PHOTO_COUNT)} />
+  }
+
   return (
     <Masonry<PhotoManifest>
       ref={masonryRef}
       items={photos}
-      render={useCallback(
-        (props) => (
-          <MasonryItem {...props} />
-        ),
-        [],
-      )}
+      render={renderMasonryItem}
       onRender={onRender}
       columnWidth={columnWidth}
       columnGutter={4}
@@ -120,11 +131,36 @@ export const MasonryView = ({ photos, onRender }: MasonryViewProps) => {
       // 约 219px、中位数 185px（偏差 +83%），移动端偏差更大，导致文档高度虚高约 72%、
       // 滚到底时高度收缩而「跳」。那是既有问题，留给后续 PR。
       overscanBy={1.5}
-      itemKey={useCallback((data, _index) => {
-        return data.id
-      }, [])}
+      itemKey={getItemKey}
     />
   )
 }
 
 const MasonryItem = memo(MasonryPhotoItem)
+
+function SsrPhotoGrid({ photos }: { photos: PhotoManifest[] }) {
+  return (
+    <div
+      key="ssr-grid"
+      className="grid grid-cols-2 items-start gap-1 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7"
+    >
+      {photos.map((photo, index) => (
+        <a
+          key={photo.id}
+          href={`/photos/${encodeURIComponent(photo.id)}`}
+          className="bg-fill-quaternary relative block w-full overflow-hidden"
+          style={{ aspectRatio: photo.aspectRatio }}
+        >
+          <img
+            src={photo.thumbnailUrl}
+            alt={photo.title}
+            loading={index < SSR_EAGER_IMAGE_COUNT ? 'eager' : 'lazy'}
+            fetchPriority={index < SSR_EAGER_IMAGE_COUNT ? 'high' : undefined}
+            decoding="async"
+            className="absolute inset-0 h-full w-full object-cover"
+          />
+        </a>
+      ))}
+    </div>
+  )
+}

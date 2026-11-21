@@ -18,7 +18,9 @@ export const Row: FC<{
           </span>
         </span>
       ) : (
-        <span className="text-text min-w-0 text-right">{Array.isArray(value) ? value.join(' ') : value}</span>
+        <span className="text-text min-w-0 text-right" suppressHydrationWarning>
+          {Array.isArray(value) ? value.join(' ') : value}
+        </span>
       )}
     </div>
   )

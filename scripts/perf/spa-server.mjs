@@ -6,6 +6,7 @@
 import { createReadStream, existsSync, statSync } from 'node:fs'
 import { createServer } from 'node:http'
 import path from 'node:path'
+import process from 'node:process'
 
 const root = path.resolve(process.argv[2] ?? 'apps/web/dist')
 const port = Number(process.argv[3] ?? 8140)
@@ -41,8 +42,15 @@ const server = createServer((req, res) => {
 
   let send = filePath
   if (!existsSync(send) || !statSync(send).isFile()) {
-    // SPA fallback — same as Cloudflare Pages' single-page-app behaviour
-    send = path.join(root, 'index.html')
+    const htmlCandidate = `${filePath}.html`
+    if (existsSync(htmlCandidate) && statSync(htmlCandidate).isFile()) {
+      // Cloudflare Pages clean URLs: `/photos/<id>` -> `photos/<id>.html`, `/map` -> `map.html`
+      send = htmlCandidate
+    }
+    else {
+      // SPA fallback — same as Cloudflare Pages' single-page-app behaviour
+      send = path.join(root, 'index.html')
+    }
   }
 
   const ext = path.extname(send).toLowerCase()
@@ -50,7 +58,7 @@ const server = createServer((req, res) => {
   const headers = {
     'content-type': MIME[ext] ?? 'application/octet-stream',
     // hashed assets: immutable; everything else: revalidate (like the real _headers file)
-    'cache-control': /^\/(assets|vendor|fonts)\//.test(urlPath) || /photos-manifest\./.test(urlPath)
+    'cache-control': /^\/(?:assets|vendor|fonts)\//.test(urlPath) || /photos-manifest\./.test(urlPath)
       ? 'public, max-age=31536000, immutable'
       : 'public, max-age=0, must-revalidate',
   }

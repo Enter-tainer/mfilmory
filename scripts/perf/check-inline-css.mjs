@@ -15,8 +15,10 @@
 //   3) node scripts/perf/check-inline-css.mjs <distDir> <refDir>
 //
 // 只给一个参数时退化成「结构性检查」（不含 CSS 内容比对），会明确说明这一点。
+import { Buffer } from 'node:buffer'
 import fs from 'node:fs'
 import path from 'node:path'
+import process from 'node:process'
 
 const distDir = process.argv[2]
 const refDir = process.argv[3]
@@ -26,10 +28,10 @@ if (!distDir || !fs.existsSync(distDir)) {
 }
 
 const html = fs.readFileSync(path.join(distDir, 'index.html'), 'utf8')
-const styleBlocks = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map(m => m[1])
+const styleBlocks = Array.from(html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g), m => m[1])
 const inlineCss = styleBlocks.join('\n')
 
-const linkTags = [...html.matchAll(/<link\b[^>]*>/g)].map(m => m[0])
+const linkTags = Array.from(html.matchAll(/<link\b[^>]*>/g), m => m[0])
 const stylesheetLinks = linkTags.filter(t => /\brel\s*=\s*"stylesheet"/.test(t))
 
 const assetsDir = path.join(distDir, 'assets')
@@ -41,8 +43,12 @@ const jsFiles = []
 const walk = (dir) => {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name)
-    if (entry.isDirectory()) walk(full)
-    else if (entry.name.endsWith('.js')) jsFiles.push(full)
+    if (entry.isDirectory()) {
+      walk(full)
+    }
+    else if (entry.name.endsWith('.js')) {
+      jsFiles.push(full)
+    }
   }
 }
 walk(distDir)
@@ -56,21 +62,22 @@ console.log(`<style> 段数: ${styleBlocks.length}，内联 CSS 总字节: ${inl
 console.log(`剩余 <link rel=stylesheet>: ${stylesheetLinks.length} ${JSON.stringify(stylesheetLinks)}`)
 console.log(`assets/ 里剩余的 CSS: ${JSON.stringify(remainingCss)}`)
 
-// 1) 主 CSS 不该还躺在 assets/ 里
-const mainCssLeft = remainingCss.filter(f => /^index[.-]?[A-Za-z0-9_-]*\.css$/.test(f))
-if (mainCssLeft.length > 0) {
+// 1) 非逐路由 SSG 模式时主 CSS 不该留在 assets/ 里；逐路由 SSG 模式下子页会外链复用该文件，但 index.html 自身仍必须内联且不发外链
+const hasSsgSubPages = fs.existsSync(path.join(distDir, 'photos'))
+const mainCssLeft = remainingCss.filter(f => /^index[.-]?[\w-]*\.css$/.test(f))
+if (!hasSsgSubPages && mainCssLeft.length > 0) {
   problems.push(`主 CSS 仍留在 assets/ 里：${mainCssLeft.join(', ')}（内联没生效，或者只是复制了一份）`)
 }
 // 2) HTML 里不该还有指向主 CSS 的 <link>
 for (const link of stylesheetLinks) {
-  if (/assets\/(index|main)[.-]/.test(link)) {
+  if (/assets\/(?:index|main)[.-]/.test(link)) {
     problems.push(`HTML 里还有指向主 CSS 的 <link>：${link}`)
   }
 }
 // 3) 任何 JS/资源都不该引用已经不存在的 CSS 文件
 for (const jsFile of jsFiles) {
   const code = fs.readFileSync(jsFile, 'utf8')
-  const hits = [...code.matchAll(/["']([^"']*assets\/[^"']*\.css)["']/g)].map(m => m[1])
+  const hits = Array.from(code.matchAll(/["']([^"']*assets\/[^"']*\.css)["']/g), m => m[1])
   for (const hit of hits) {
     const base = path.basename(hit)
     if (!remainingCss.includes(base)) {
@@ -89,8 +96,7 @@ else if (!fs.existsSync(refDir)) {
 }
 else {
   const refHtml = fs.readFileSync(path.join(refDir, 'index.html'), 'utf8')
-  const refCssHref = [...refHtml.matchAll(/<link\b[^>]*>/g)]
-    .map(m => m[0])
+  const refCssHref = Array.from(refHtml.matchAll(/<link\b[^>]*>/g), m => m[0])
     .filter(t => /\brel\s*=\s*"stylesheet"/.test(t))
     .map(t => (t.match(/\bhref\s*=\s*"([^"]+)"/) ?? [])[1])
     .filter(Boolean)
@@ -114,12 +120,17 @@ else {
         const sameLen = inlineCss.length === refCss.length
         problems.push(
           `内联 CSS 与参照 CSS 不一致：参照 ${refCss.length} B，内联总 ${inlineCss.length} B`
-          + (sameLen ? '（长度相同但内容不同）' : `（差 ${inlineCss.length - refCss.length} B）`)
+          + `${sameLen ? '（长度相同但内容不同）' : `（差 ${inlineCss.length - refCss.length} B）`}`
           + ' —— 通常意味着 html-minifier/clean-css 又对内联内容做了二次处理（minifyCSS 应为 false）',
         )
         const n = Math.min(inlineCss.length, refCss.length)
         let at = -1
-        for (let i = 0; i < n; i++) { if (inlineCss[i] !== refCss[i]) { at = i; break } }
+        for (let i = 0; i < n; i++) {
+          if (inlineCss[i] !== refCss[i]) {
+            at = i
+            break
+          }
+        }
         if (at >= 0) {
           problems.push(`  首个差异 @${at}: inline=${JSON.stringify(inlineCss.slice(at, at + 60))} ref=${JSON.stringify(refCss.slice(at, at + 60))}`)
         }
@@ -132,11 +143,15 @@ else {
 }
 
 console.log('')
-for (const n of notes) console.log('ℹ️  ' + n)
+for (const n of notes) {
+  console.log(`ℹ️  ${n}`)
+}
 if (problems.length === 0) {
-  console.log('✅ 通过：主 CSS 已内联、无残留引用' + (refDir ? '、内容与参照产物逐字节一致' : ''))
+  console.log(`✅ 通过：主 CSS 已内联、无残留引用${refDir ? '、内容与参照产物逐字节一致' : ''}`)
   process.exit(0)
 }
 console.log(`❌ ${problems.length} 个问题：`)
-for (const p of problems) console.log('  - ' + p)
+for (const p of problems) {
+  console.log(`  - ${p}`)
+}
 process.exit(1)
