@@ -2,6 +2,8 @@ import type { Buffer } from 'node:buffer'
 
 import sharp from 'sharp'
 
+import { resolveIccPreservation } from '../../image/color-profile.js'
+
 /**
  * 照片直放（photo-straight）分享图。
  *
@@ -30,18 +32,22 @@ import sharp from 'sharp'
 export const PHOTO_OG_WIDTH = 1200
 export const PHOTO_OG_WEBP_QUALITY = 88
 /**
- * 尺寸规则版本。
+ * 渲染规则版本（尺寸 + 编码参数）。
  *
  * 分享图文件名固定是 `<photoId>.webp`，改完规则后光看文件在不在判断不了卡片是不是
  * 新参数生成的。签名（`index.ts` 里的 `ogSignature`）带上这个常量，递增它就会让
  * 增量构建重渲染旧卡片，而不是继续复用旧图。
+ *
+ * v3：广色域源图保留 ICC Profile，卡片不再被裁到 sRGB（见 `image/color-profile.ts`）。
  */
-export const PHOTO_OG_LAYOUT_VERSION = 'width-cap-1200-v2'
+export const PHOTO_OG_LAYOUT_VERSION = 'width-cap-1200-v3'
 
 export async function renderPhotoOgImage(input: Buffer): Promise<Buffer> {
-  return sharp(input, { limitInputPixels: false })
+  const keepIcc = await resolveIccPreservation(input, false)
+  const pipeline = sharp(input, { limitInputPixels: false })
     .rotate()
     .resize({ width: PHOTO_OG_WIDTH, withoutEnlargement: true })
+  return await (keepIcc ? pipeline.keepIccProfile() : pipeline)
     .webp({ quality: PHOTO_OG_WEBP_QUALITY, effort: 4 })
     .toBuffer()
 }

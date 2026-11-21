@@ -98,9 +98,12 @@ self.onmessage = async (e) => {
           return
         }
 
-        // Use OffscreenCanvas to draw the tile
+        // Use OffscreenCanvas to draw the tile. The context is created in Display P3 so that
+        // a wide-gamut source (Lightroom's P3 exports) is copied into the tile without being
+        // silently converted to sRGB; the main thread draws into a `display-p3` WebGL canvas.
+        // Browsers without P3 canvas support ignore the option and fall back to sRGB.
         const canvas = new OffscreenCanvas(targetWidth, targetHeight)
-        const ctx = canvas.getContext('2d')
+        const ctx = canvas.getContext('2d', { colorSpace: 'display-p3' })
 
         ctx.imageSmoothingEnabled = true
         ctx.imageSmoothingQuality = lodConfig.scale >= 1 ? 'high' : 'medium'
