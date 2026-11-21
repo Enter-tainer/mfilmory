@@ -44,14 +44,7 @@ export default defineBuilderConfig(() => ({
   storage, // 与 build:manifest 用同一套存储配置
   plugins: [
     thumbnailStoragePlugin(),
-    ogImagePlugin({
-      vendor: {
-        type: 'cloudflare-middleware',
-        storageURL: 'https://your-cdn.example.com', // 提供 .afilmory/og-images/* 的 CDN / 对象存储
-        siteConfigPath: './config.json', // 可选，默认仓库根 config.json
-        manifestPath: 'apps/web/src/data/photos-manifest.json', // 可选，默认就是这个
-      },
-    }),
+    ogImagePlugin(),
   ],
 }))
 ```
@@ -64,22 +57,16 @@ pnpm build:manifest -- --force-manifest
 
 `--force-manifest` 不会重新生成缩略图/占位图，只重渲染分享图并重新上传。
 
-## Cloudflare Pages 中间件
+## 分享卡片 meta 从哪来
 
-`vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk` 生成仓库根的
-`functions/_middleware.ts`（**构建产物，不提交**）。`pnpm build` 会自动生成，也可以单独重生成：
+`/photos/:id` 的 `og:image` / `twitter:image` / `og:title` / `og:description` / `<title>` /
+`meta[name=description]` 由 `apps/web/plugins/vite/ssg-prerender.ts` 在构建期调用
+`photo-text.ts`（`buildPhotoOgText`）直接写进静态 `photos/<id>.html`，分享平台读的就是这些静态 meta。
 
-```bash
-pnpm og:middleware                 # 用 .env 里的 S3_CUSTOM_DOMAIN 作 storageURL
-pnpm og:middleware -- --check      # 校验磁盘文件是否最新，并核对 _routes.json 的 include
-```
-
-`/photos/:id` 的 meta 已由 `ssg-prerender.ts` 在静态 `photos/<id>.html` 中内嵌，因此该中间件目前**只处理
-`/og/:photoId`**（分享弹窗用）：把 `/og/:photoId` **302** 重定向到 R2 的 `.afilmory/og-images/<photoId>.webp`
-（运行时 manifest 裁掉了 `ogImageUrl`，靠这个跳转拿图），不再对 `/photos/*` 运行 `HTMLRewriter` 或内嵌整库文案表。
-
-部署到 Cloudflare Pages 时 **project root 必须是仓库根**（或显式 `--functions-directory`），
-否则 `functions/` 不会被带上，`/og/:photoId` 跳转会失效。
+**站点没有 Cloudflare Pages Functions**：`vendors/`（`cloudflare-middleware` 模板）、
+`functions/_middleware.ts`、`apps/web/public/_routes.json`、`pnpm og:middleware` 都已删除。
+分享弹窗的预览与「下载预览图」直接用运行时 manifest 里的 `previewUrl`（2560px 占位图，
+打开 viewer 时通常已缓存），不再经过 `/og/:photoId` 跳转。
 
 ## 配置
 
@@ -87,11 +74,6 @@ pnpm og:middleware -- --check      # 校验磁盘文件是否最新，并核对 
 - `directory` (string)：远端目录前缀，默认 `.afilmory/og-images`。
 - `storageConfig` (storage config)：覆盖存储配置，默认用 builder 当前存储。
 - `contentType` (string)：上传 MIME，默认 `image/webp`。
-- `vendor` (object)：可选自动化。
-  目前只有 `cloudflare-middleware`：
-  - `storageURL`（必填）：提供 `.afilmory/og-images` 的地址；
-  - `siteConfigPath`（可选）：站点配置路径，默认仓库根 `config.json`；
-  - `manifestPath`（可选）：manifest 路径，默认 `apps/web/src/data/photos-manifest.json`。
 
 ## 实现要点
 

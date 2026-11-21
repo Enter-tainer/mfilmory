@@ -28,12 +28,6 @@ apps/web/src/generated-routes.ts
 cluster-report.html
 cluster-report.json
 
-# Cloudflare Pages Functions output. `functions/_middleware.ts` is generated
-# from the cloudflare-middleware OG vendor template during `pnpm build`, so it
-# is build output and must not be committed. Deploy only after a build that
-# regenerates it (scripts/deploy.mjs regenerates it when missing).
-functions/_middleware.ts
-
 # agent scratch
 .claude
 .superpowers/

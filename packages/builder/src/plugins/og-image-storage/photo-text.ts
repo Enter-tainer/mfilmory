@@ -248,14 +248,3 @@ export function buildPhotoOgText(item: PhotoTextSource, options: BuildPhotoOgTex
   }
 }
 
-/** 生成给 middleware 内嵌的整库文字表：photoId → { title, description, summary }。 */
-export function buildPhotoOgTextMap(
-  photos: ReadonlyArray<PhotoTextSource & { id: string }>,
-  options: BuildPhotoOgTextOptions = {},
-): Record<string, PhotoOgText> {
-  const map: Record<string, PhotoOgText> = {}
-  for (const photo of photos) {
-    map[photo.id] = buildPhotoOgText(photo, options)
-  }
-  return map
-}

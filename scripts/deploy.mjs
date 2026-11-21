@@ -2,15 +2,14 @@
 /**
  * Cloudflare Pages deploy helper.
  *
- * Why a script instead of a bare `wrangler pages deploy`: wrangler only picks up
- * the `functions/` directory of its *working directory*, and this repo keeps the
- * CF OG middleware in the repo root (`functions/_middleware.ts`). Deploying from
- * `apps/web` silently ships a Pages project without that middleware.
+ * 站点是纯静态的：`apps/web/dist` 里只有 HTML/JS/CSS/图片，没有 Pages Functions，
+ * 也没有 `_routes.json`。保留这个脚本是为了把「构建 → 校验产物 → 处理脏工作区 →
+ * 用固定的 project / branch 部署」收敛成一条命令，避免手搓 wrangler 时漏参数。
  *
  * Usage:
  *   node scripts/deploy.mjs                  # build + deploy to production (branch main)
  *   node scripts/deploy.mjs --preview        # build + deploy as a preview deployment
- *   node scripts/deploy.mjs --skip-build     # deploy the existing apps/web/dist (regenerates the middleware when missing or stale)
+ *   node scripts/deploy.mjs --skip-build     # deploy the existing apps/web/dist
  *   node scripts/deploy.mjs --dry-run        # print the wrangler command only
  *   node scripts/deploy.mjs --project=foo --branch=bar --dirty
  *
@@ -39,7 +38,6 @@ const branch = value(
 )
 const skipBuild = has('--skip-build')
 const dryRun = has('--dry-run')
-const allowMissingMiddleware = has('--allow-missing-middleware')
 
 function fail(message) {
   console.error(`\n✗ ${message}\n`)
@@ -51,7 +49,6 @@ for (const [label, val] of [['project', project], ['branch', branch]]) {
 }
 
 const distDir = path.join(root, 'apps', 'web', 'dist')
-const middleware = path.join(root, 'functions', '_middleware.ts')
 
 if (skipBuild) {
   console.info('• --skip-build: reusing', path.relative(root, distDir))
@@ -63,62 +60,6 @@ else {
 
 if (!existsSync(path.join(distDir, 'index.html'))) {
   fail(`apps/web/dist/index.html is missing — run "pnpm build" first (or drop --skip-build)`)
-}
-
-if (!existsSync(middleware)) {
-  const hint = 'run "pnpm build" (the builder regenerates it) or "pnpm og:middleware"'
-  if (allowMissingMiddleware) {
-    console.warn(`⚠ functions/_middleware.ts is missing — the Cloudflare OG middleware will NOT be deployed (${hint})`)
-  }
-  else if (dryRun) {
-    console.warn(`⚠ functions/_middleware.ts is missing (dry-run: not regenerating) — ${hint}`)
-  }
-  else {
-    // The middleware is git-ignored build output, so a fresh clone or a
-    // `--skip-build` deploy may not have it. Regenerate it from the vendor
-    // template before giving up; the generator reads S3_CUSTOM_DOMAIN from .env.
-    console.info('• functions/_middleware.ts is missing — regenerating (pnpm og:middleware)…')
-    try {
-      execSync('pnpm og:middleware', { cwd: root, stdio: 'inherit' })
-    }
-    catch {
-      // fall through to the explicit failure below
-    }
-    if (!existsSync(middleware)) {
-      fail(`functions/_middleware.ts is missing and could not be regenerated — ${hint}; make sure .env contains S3_CUSTOM_DOMAIN`)
-    }
-  }
-}
-
-// 存在 ≠ 最新：中间件是模板的构建产物，改了 vendor 模板（比如给分享弹窗加 /og/*
-// 跳转）之后，`--skip-build` 部署会把旧文件原样发上去，且没有任何报错。
-// 用 `og:middleware --check` 比对磁盘文件与「按当前模板/配置重新生成」的结果。
-const middlewareIsFresh = () => {
-  try {
-    execSync('pnpm og:middleware -- --check', { cwd: root, stdio: 'inherit' })
-    return true
-  }
-  catch {
-    return false
-  }
-}
-
-if (existsSync(middleware) && !middlewareIsFresh()) {
-  if (dryRun) {
-    console.warn('⚠ functions/_middleware.ts is stale (dry-run: not regenerating) — run "pnpm og:middleware"')
-  }
-  else if (allowMissingMiddleware) {
-    console.warn('⚠ functions/_middleware.ts is stale — --allow-missing-middleware: deploying it as-is')
-  }
-  else {
-    console.info('• functions/_middleware.ts is stale — regenerating (pnpm og:middleware)…')
-    try {
-      execSync('pnpm og:middleware', { cwd: root, stdio: 'inherit' })
-    }
-    catch {
-      console.warn('⚠ could not regenerate functions/_middleware.ts — deploying the existing (stale) file; make sure .env contains S3_CUSTOM_DOMAIN')
-    }
-  }
 }
 
 // wrangler refuses to deploy a dirty working tree unless told to.
@@ -140,8 +81,7 @@ const command = `pnpx wrangler pages deploy apps/web/dist --project-name ${proje
 
 console.info(`\n• project : ${project}`)
 console.info(`• branch  : ${branch}${preview ? '  (preview deployment)' : '  (production deployment)'}`)
-console.info(`• dir     : apps/web/dist (${path.relative(root, distDir)})`)
-console.info(`• functions: ${path.relative(root, middleware)}${dryRun ? ' [dry-run]' : ''}\n`)
+console.info(`• dir     : apps/web/dist (${path.relative(root, distDir)})${dryRun ? ' [dry-run]' : ''}\n`)
 
 if (dryRun) {
   console.info(`${command}\n`)
