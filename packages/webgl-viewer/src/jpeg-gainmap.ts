@@ -328,23 +328,13 @@ function metadataFor(bytes: Uint8Array, jpeg: JPEG): GainMapMetadata | null {
   return null
 }
 
-function colorants(bytes: Uint8Array, jpeg: JPEG): Matrix3 {
-  const segments = jpeg.segments.filter(s => s.marker === 0xE2 && startsWith(bytes, s, 'ICC_PROFILE\0'))
-  if (!segments.length) {
-    return SRGB_TO_XYZ
-  }
-  segments.sort((a, b) => bytes[a.data + 12] - bytes[b.data + 12])
-  if (segments.some((s, i) => bytes[s.data + 12] !== i + 1 || bytes[s.data + 13] !== segments.length)) {
-    throw new Error('Incomplete ICC profile')
-  }
-  const icc = new Uint8Array(segments.reduce((sum, s) => sum + s.end - s.data - 14, 0))
-  let cursor = 0
-  for (const s of segments) {
-    const part = bytes.subarray(s.data + 14, s.end)
-    icc.set(part, cursor)
-    cursor += part.length
-  }
-  const view = new DataView(icc.buffer)
+/**
+ * Read an RGB matrix/TRC profile's colorants (rXYZ/gXYZ/bXYZ, PCS D50, column-major).
+ * Shared by the JPEG and AVIF gain-map paths; also validates that the profile really
+ * carries an RGB matrix instead of, say, a LUT.
+ */
+export function parseIccColorants(icc: Uint8Array): Matrix3 {
+  const view = new DataView(icc.buffer, icc.byteOffset, icc.byteLength)
   if (decoder.decode(icc.subarray(16, 20)) !== 'RGB ') {
     throw new Error('Unsupported HDR ICC color space')
   }
@@ -374,6 +364,25 @@ function colorants(bytes: Uint8Array, jpeg: JPEG): Matrix3 {
   }
   inverseMatrix(result as Matrix3)
   return result as Matrix3
+}
+
+function colorants(bytes: Uint8Array, jpeg: JPEG): Matrix3 {
+  const segments = jpeg.segments.filter(s => s.marker === 0xE2 && startsWith(bytes, s, 'ICC_PROFILE\0'))
+  if (!segments.length) {
+    return SRGB_TO_XYZ
+  }
+  segments.sort((a, b) => bytes[a.data + 12] - bytes[b.data + 12])
+  if (segments.some((s, i) => bytes[s.data + 12] !== i + 1 || bytes[s.data + 13] !== segments.length)) {
+    throw new Error('Incomplete ICC profile')
+  }
+  const icc = new Uint8Array(segments.reduce((sum, s) => sum + s.end - s.data - 14, 0))
+  let cursor = 0
+  for (const s of segments) {
+    const part = bytes.subarray(s.data + 14, s.end)
+    icc.set(part, cursor)
+    cursor += part.length
+  }
+  return parseIccColorants(icc)
 }
 
 function orientation(bytes: Uint8Array, jpeg: JPEG): number {

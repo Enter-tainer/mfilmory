@@ -39,7 +39,7 @@ import { shouldProcessPhoto } from './cache-manager.js'
 import type { CpuPhotoTaskInput, CpuPhotoTaskOutput } from './cpu-task.js'
 import { runPhotoCpuTask } from './cpu-task.js'
 import { getPhotoExecutionContext } from './execution-context.js'
-import { detectGainMap } from './gainmap-detector.js'
+import { detectAvifGainMap, detectGainMap } from './gainmap-detector.js'
 import { extractPhotoInfo } from './info-extractor.js'
 import { processLivePhoto } from './live-photo-handler.js'
 import { getGlobalLoggers } from './logger-adapter.js'
@@ -464,6 +464,9 @@ export async function executePhotoProcessingPipeline(
   const hasGainMap = detectGainMap({
     exifData: exifData as unknown as Record<string, unknown> | null,
   })
+  // AVIF Ultra HDR：gain map 是容器里的 `tmap` 派生项，exiftool 看不到。
+  // 拿不到原图字节时返回 null（保留上次构建的结论，不覆写成 false）。
+  const hasAvifGainMap = await detectAvifGainMap(rawBuffer, rawFilePath, loggers.image)
 
   // 6. 检测 Motion Photo（cpu-worker 模式下仅当 EXIF 含 Motion Photo 标记时才按需读盘）
   const hasMotionHint = Boolean(
@@ -551,7 +554,8 @@ export async function executePhotoProcessingPipeline(
     isHDR:
       exifData?.MPImageType === 'Gain Map Image'
       || exifData?.UniformResourceName === 'urn:iso:std:iso:ts:21496:-1'
-      || hasGainMap,
+      || hasGainMap
+      || (hasAvifGainMap ?? Boolean(existingItem?.isHDR)),
   }
 
   loggers.image.success(`✅ 处理完成：${photoKey}`)

@@ -25,6 +25,8 @@ export const MEDIA_FORMAT_VERSION = [
   `preview${PREVIEW_SIZE}q${PREVIEW_QUALITY}b${PREVIEW_BITDEPTH}`,
   // 广色域原图保留 ICC（像素不再被裁到 sRGB）：产物内容变了，必须整批重编
   'icc',
+  // AVIF 的 nclx 源（Lightroom Display P3）给产物补 colr 标记，旧产物是无标记的灰调
+  'cicp',
 ].join('-')
 
 const MARKER_PATH = path.join(workdir, 'src/data/.cache/media-format-version')

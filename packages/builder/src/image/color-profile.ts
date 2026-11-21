@@ -1,6 +1,9 @@
 import type { Buffer } from 'node:buffer'
 
+import type { Sharp } from 'sharp'
 import sharp from 'sharp'
+
+import { isAvifDisplayP3 } from './avif-color.js'
 
 /**
  * 源图 ICC Profile 的保留策略。
@@ -100,6 +103,8 @@ export function shouldKeepIccProfile(icc: Buffer | undefined): boolean {
   return classifyIccProfile(icc) === 'wide-gamut'
 }
 
+export type ColorProfileStrategy = 'keep-icc' | 'attach-p3' | 'srgb'
+
 /**
  * 读源图元信息再判断要不要保留 ICC。
  *
@@ -110,12 +115,45 @@ export async function resolveIccPreservation(
   imageBuffer: Buffer,
   limitInputPixels?: number | boolean,
 ): Promise<boolean> {
+  return (await resolveColorProfileStrategy(imageBuffer, limitInputPixels)) === 'keep-icc'
+}
+
+/**
+ * 决定编码产物的色彩配置策略：
+ * - `'keep-icc'`：源图内嵌广色域 ICC（如 Display P3 JPEG），原样保留；
+ * - `'attach-p3'`：源图是没有 ICC、仅通过 `colr/nclx` 标记为 Display P3（SDR 传递函数）的 AVIF；
+ *   libvips 解码这种图不会做色域转换且会丢掉标记，必须配合 `pipelineColourspace('rgb16').withIccProfile('p3')`
+ *   原样保留像素值并挂上 P3 ICC；
+ * - `'srgb'`：sRGB 或未知配置，走 sharp 默认转换并剥离冗余 ICC。
+ */
+export async function resolveColorProfileStrategy(
+  imageBuffer: Buffer,
+  limitInputPixels?: number | boolean,
+): Promise<ColorProfileStrategy> {
   try {
     const { icc } = await sharp(imageBuffer, { limitInputPixels }).metadata()
-    return shouldKeepIccProfile(icc)
+    if (shouldKeepIccProfile(icc)) {
+      return 'keep-icc'
+    }
+    if (!icc && isAvifDisplayP3(imageBuffer)) {
+      return 'attach-p3'
+    }
+    return 'srgb'
   }
   catch {
     // 读不出元信息时保持 sharp 默认（转 sRGB 并剥离）；编码阶段会再抛一次。
-    return false
+    return 'srgb'
   }
+}
+
+/** 将 `resolveColorProfileStrategy` 决定的策略应用到 sharp 管线。 */
+export function applyColorProfileStrategy(pipeline: Sharp, strategy: ColorProfileStrategy): Sharp {
+  if (strategy === 'keep-icc') {
+    return pipeline.keepIccProfile()
+  }
+  if (strategy === 'attach-p3') {
+    // `pipelineColourspace('rgb16')` 阻止 sharp 对无 ICC 输入执行 sRGB→P3 转换，只把 P3 ICC 写进输出容器。
+    return pipeline.pipelineColourspace('rgb16').withIccProfile('p3')
+  }
+  return pipeline
 }

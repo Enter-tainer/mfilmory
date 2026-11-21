@@ -10,7 +10,7 @@ import { getGlobalLoggers } from '../photo/logger-adapter.js'
 import { hardForceEncode, signatureMatches, writeSignature } from './asset-signature.js'
 import { resolveAvifBitdepth } from './avif-bitdepth.js'
 import { generateBlurhash } from './blurhash.js'
-import { resolveIccPreservation } from './color-profile.js'
+import { applyColorProfileStrategy, resolveColorProfileStrategy } from './color-profile.js'
 
 // 常量定义
 const THUMBNAIL_DIR = path.join(workdir, 'public/thumbnails')
@@ -43,23 +43,25 @@ export const THUMBNAIL_WIDTH = 500
  * 入口门禁（`filterTaskImages`）也拿它当权威判据——只看「文件在不在」是不够的，
  * 换位深这类改动文件名不变，会静默复用旧产物。
  * `-icc`：广色域原图保留 ICC（见 `color-profile.ts`），旧产物是被裁到 sRGB 的。
+ * `-cicp`：AVIF 的 nclx Display P3 源现在的产物会带上 P3 ICC Profile
+ * （见 `color-profile.ts` / `avif-color.ts`），旧产物是无标记的灰调缩略图。
  */
-export const THUMBNAIL_SIGNATURE = `${THUMBNAIL_WIDTH}q${THUMBNAIL_QUALITY}e6b${THUMBNAIL_BITDEPTH}-icc.${THUMBNAIL_EXTENSION}`
+export const THUMBNAIL_SIGNATURE = `${THUMBNAIL_WIDTH}q${THUMBNAIL_QUALITY}e6b${THUMBNAIL_BITDEPTH}-icc-cicp.${THUMBNAIL_EXTENSION}`
 
 export async function encodeThumbnailBuffer(
   imageBuffer: Buffer,
   limitInputPixels?: number | boolean,
 ): Promise<Buffer> {
-  const [bitdepth, keepIcc] = await Promise.all([
+  const [bitdepth, colorStrategy] = await Promise.all([
     resolveAvifBitdepth(THUMBNAIL_BITDEPTH, imageBuffer, limitInputPixels),
-    resolveIccPreservation(imageBuffer, limitInputPixels),
+    resolveColorProfileStrategy(imageBuffer, limitInputPixels),
   ])
   const pipeline = sharp(imageBuffer, { limitInputPixels })
     .rotate()
     .resize(THUMBNAIL_WIDTH, null, {
       withoutEnlargement: true,
     })
-  return await (keepIcc ? pipeline.keepIccProfile() : pipeline)
+  return await applyColorProfileStrategy(pipeline, colorStrategy)
     .avif({ quality: THUMBNAIL_QUALITY, effort: 6, bitdepth })
     .toBuffer()
 }
