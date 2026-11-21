@@ -25,8 +25,7 @@ import sharp from 'sharp'
  * - Discord 大图有约 400×300 的展示上限，高图会被缩小；
  * - X / Facebook / LinkedIn 会按 1.91:1–2:1 裁切，竖图必被裁。
  *
- * 文字全部交给 og:title / og:description（见 `photo-text.ts` 与
- * `vendors/cloudflare-moddleware.ts`）。
+ * 文字全部交给 og:title / og:description（见 `photo-text.ts`；由 `ssg-prerender` 在构建期写进静态页）。
  */
 export const PHOTO_OG_WIDTH = 1200
 export const PHOTO_OG_WEBP_QUALITY = 88

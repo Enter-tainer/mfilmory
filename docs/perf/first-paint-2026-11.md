@@ -415,3 +415,11 @@ hover/focus 某张照片时才 `import()` viewer 路由（190 KB br），`window
   - `/map` 拦截主 JS（`1440×900` 与 `390×844`）无 `#ssg-fallback-hide`，首帧即见 `opacity: 1` 玻璃态加载卡片与左上角 `a[href="/"]` 返回入口、`robots="noindex"`；放行 JS 在桌面 / `390×844` / `/map?photoId=20261104-LKXG5370` 均渲染 `.maplibregl-map` 且 0 报错。
   - `/manifest`、`/?cameras=SONY%20ILCE-7RM5` 与 `/nonexistent-404` 拦截主 JS 时命中 `#ssg-fallback-hide`（`#root` `display:none`，背景 `rgb(28, 28, 30)`），`/` 保持 36 张可见；`/` 与 `/photos/20261104-LKXG5370` Zero-JS 下均可用 `<noscript>` / 关闭 `<a>` 返回画廊。
 - **零水合报错实测**：`/`、ASCII/CJK `/photos/<id>`、`/map`（桌面/移动/深链参数）、SPA 回退 `/manifest`·`/?cameras=SONY%20ILCE-7RM5`·`/nonexistent-404`、移动端 `390×844` `/` 与 `/photos/<id>`、以及 `localStorage.i18nextLng='en'` 首页水合，全部 **0 `[hydration]` / React #418/#423/#425 / 控制台 error**。
+
+---
+
+> **后续变更（2026-11-21，分支 `refactor/drop-pages-functions`）**：`/og/:photoId` 与整套 Cloudflare
+> Pages Functions 已删除（`functions/`、`_routes.json`、`og:middleware`、`cloudflare-middleware`
+> vendor）。分享弹窗的预览/下载改用运行时 manifest 的 `previewUrl`；`/photos/:id` 的 OG meta 仍由
+> `ssg-prerender` 写进静态 HTML。上文提到的 `/og` 302、`_routes.json` 的 `include: ["/og/*"]`、
+> `pnpm og:middleware -- --check` 都是当时的状态。

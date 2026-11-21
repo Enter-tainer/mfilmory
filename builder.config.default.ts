@@ -57,21 +57,13 @@ export default defineBuilderConfig(() => ({
   },
   // plugins: [thumbnailStoragePlugin()],
   //
-  // OG image plugin (optional): generates the Cloudflare Pages OG middleware
-  // (`functions/_middleware.ts`) from the vendor template during `pnpm build`.
-  // The card itself is just the photo; titles/EXIF are injected as og:title /
-  // og:description by that middleware. `storageURL` must be the public base URL
-  // of the storage serving `.afilmory/og-images/*` — normally the same value as
-  // S3_CUSTOM_DOMAIN, which also drives `pnpm og:middleware` and scripts/deploy.mjs.
+  // OG image plugin (optional): renders `.afilmory/og-images/<id>.webp`（就是照片本身，
+  // 长边上限 1200）并在 `pnpm build` 时上传。分享卡片用的 og:title / og:description /
+  // og:image 由 apps/web 的 `ssg-prerender` 在构建期写进每张 `photos/<id>.html`；
+  // 站点没有 Cloudflare Pages Functions。
   //
   // Import it from '@afilmory/builder' first, then uncomment:
-  // ogImagePlugin({
-  //   vendor: {
-  //     type: 'cloudflare-middleware',
-  //     storageURL: env.S3_CUSTOM_DOMAIN,
-  //     siteConfigPath: './config.json',
-  //   },
-  // }),
+  // ogImagePlugin(),
   plugins: [
     githubRepoSyncPlugin({
       repo: {

@@ -1,7 +1,6 @@
 import { Buffer } from 'node:buffer'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 
 import type { PhotoManifestItem } from '@afilmory/typing'
 
@@ -16,12 +15,6 @@ import { MEDIA_CACHE_CONTROL, PREVIEW_PLUGIN_DATA_KEY, THUMBNAIL_PLUGIN_DATA_KEY
 import type { BuilderPlugin } from '../types.js'
 import { recordUploadFailure } from '../upload-failure.js'
 import { PHOTO_OG_LAYOUT_VERSION, PHOTO_OG_WEBP_QUALITY, renderPhotoOgImage } from './photo-og.js'
-import type { CloudflareMiddlewareVendorConfig } from './vendors/cloudflare-moddleware.js'
-import { CloudflareMiddlewareVendor } from './vendors/cloudflare-moddleware.js'
-import type { OgVendor } from './vendors/types'
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const repoRoot = path.resolve(__dirname, '../../../../..')
 
 const PLUGIN_NAME = 'afilmory:og-image'
 const RUN_STATE_KEY = 'state'
@@ -35,10 +28,7 @@ interface OgImagePluginOptions {
   directory?: string
   storageConfig?: UploadableStorageConfig
   contentType?: string
-  vendor?: OgVendorConfig
 }
-
-type OgVendorConfig = CloudflareMiddlewareVendorConfig
 
 interface ResolvedPluginConfig {
   directory: string
@@ -109,17 +99,6 @@ function getOrCreateRunState(container: Map<string, unknown>): PluginRunState {
     container.set(RUN_STATE_KEY, state)
   }
   return state
-}
-
-function createVendor(config: OgVendorConfig): OgVendor {
-  switch (config.type) {
-    case 'cloudflare-middleware': {
-      return new CloudflareMiddlewareVendor(config)
-    }
-    default: {
-      throw new Error(`Unknown OG vendor type: ${String((config as { type?: string }).type)}`)
-    }
-  }
 }
 
 async function readLocalPublicFile(url: string): Promise<Buffer | null> {
@@ -198,12 +177,12 @@ async function resolvePhotoSource(
  * Render Open Graph images for processed photos and upload them to remote storage.
  *
  * 卡片本身只有照片（见 `photo-og.ts`）；标题、日期、EXIF 这些文字交给分享平台
- * 从页面的 og:title / og:description 里原生渲染，由 middleware vendor 注入。
+ * 从页面的 og:title / og:description 里原生渲染，由 `apps/web/plugins/vite/ssg-prerender.ts`
+ * 在构建期直接写进每张 `photos/<id>.html`（不再有 Pages Function / 中间件）。
  */
 export default function ogImagePlugin(options: OgImagePluginOptions = {}): BuilderPlugin {
   let resolved: ResolvedPluginConfig | null = null
   let externalStorageManager: StorageManager | null = null
-  let vendor: OgVendor | null = null
 
   return {
     name: PLUGIN_NAME,
@@ -212,17 +191,6 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
         const enable = options.enable ?? true
         const directory = normalizeDirectory(options.directory)
         const contentType = options.contentType ?? DEFAULT_CONTENT_TYPE
-
-        if (options.vendor && !vendor) {
-          try {
-            vendor = createVendor(options.vendor)
-          }
-          catch (error) {
-            logger.main.error('OG image plugin: failed to initialize vendor config.', error)
-            throw error
-          }
-        }
-
         if (!enable) {
           resolved = {
             directory,
@@ -392,23 +360,8 @@ export default function ogImagePlugin(options: OgImagePluginOptions = {}): Build
           recordUploadFailure(item, 'og-image', error)
         }
       },
-      afterBuild: async ({ payload, logger }) => {
-        if (payload.options.dryRun || !vendor) {
-          return
-        }
-
-        try {
-          await vendor.build({ repoRoot, logger })
-        }
-        catch (error) {
-          logger.main.error('OG image plugin: vendor build step failed.', error)
-        }
-      },
     },
   }
 }
 
-export type { OgImagePluginOptions, OgVendorConfig }
-
-export { type CloudflareMiddlewareVendorConfig } from './vendors/cloudflare-moddleware.js'
-export { type OgVendorKind } from './vendors/types.js'
+export type { OgImagePluginOptions }

@@ -18,7 +18,6 @@
     "build:manifest:force": "pnpm --filter @afilmory/builder cli --force",
     "build:demo": "node scripts/prepare-demo-data.mjs && pnpm --filter @afilmory/web build",
     "preview": "pnpm --filter @afilmory/web serve",
-    "og:middleware": "tsx scripts/generate-og-middleware.ts",
     "deploy:cloudflare": "node scripts/deploy.mjs",
     "deploy:preview": "node scripts/deploy.mjs --preview",
     "migrate:manifest": "tsx scripts/migrate-manifest.ts",
