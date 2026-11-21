@@ -38,9 +38,9 @@ function readManifest(): RenderedManifest {
   }
 }
 
-// 刻意不预渲染 `/map`（纯 WebGL MapLibre，零 JS 只渲染假加载骨架）与 `/manifest`（580 KB 内部调试大表，未入 sitemap）；
-// 二者继续由静态主机回退到 `index.html` 在客户端渲染。新增加入 `generated-routes.ts` 的路由未在此列且未预渲染时会构建失败。
-const SKIPPED_PRERENDER_ROUTES = new Set(['/map', '/manifest'])
+// 刻意不预渲染 `/manifest`（580 KB 内部调试大表，未入 sitemap），继续由静态主机回退到 `index.html` 在客户端渲染。
+// 新增加入 `generated-routes.ts` 的路由未在此列且未预渲染时会构建失败。
+const SKIPPED_PRERENDER_ROUTES = new Set(['/manifest'])
 
 function replaceMetaContent(
   html: string,
@@ -206,6 +206,8 @@ export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
   let outDir = ''
   let base = '/'
   let mainCss: string | undefined
+  let mapJs: string | undefined
+  let mapCss: string | undefined
   let photoJs: string | undefined
   let photoCss: string | undefined
 
@@ -224,6 +226,8 @@ export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
         return
       }
       mainCss = undefined
+      mapJs = undefined
+      mapCss = undefined
       photoJs = undefined
       photoCss = undefined
 
@@ -235,7 +239,11 @@ export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
           continue
         }
         const facade = item.facadeModuleId?.replaceAll('\\', '/') ?? ''
-        if (facade.endsWith('/pages/(main)/photos/[photoId]/index.tsx')) {
+        if (facade.endsWith('/pages/map/index.tsx')) {
+          mapJs = item.fileName
+          mapCss = Array.from(item.viteMetadata?.importedCss ?? []).find(f => f.endsWith('.css'))
+        }
+        else if (facade.endsWith('/pages/(main)/photos/[photoId]/index.tsx')) {
           photoJs = item.fileName
           photoCss = Array.from(item.viteMetadata?.importedCss ?? []).find(f => f.endsWith('.css'))
         }
@@ -297,7 +305,7 @@ export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
         await serverMod.initSsrContext(manifest)
 
         const discoveredRoutes = serverMod.getDiscoveredRoutePaths()
-        const renderedPatterns = new Set(['/', '/photos/:photoId'])
+        const renderedPatterns = new Set(['/', '/map', '/photos/:photoId'])
         for (const route of discoveredRoutes) {
           if (!renderedPatterns.has(route) && !SKIPPED_PRERENDER_ROUTES.has(route)) {
             throw new Error(
@@ -329,7 +337,27 @@ export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
         )
         writeFileSync(indexHtmlPath, homeHtml, 'utf8')
 
-        // 2) 所有单张照片 `/photos/<id>` -> dist/photos/<id>.html
+        // 2) `/map` -> map.html（轻量玻璃态骨架屏 + noindex，复用共享 CSS + modulepreload）
+        let mapTitleReplaced = false
+        let mapHtml = injectRootHtml(subPageTemplate, '/map', await serverMod.renderRoute('/map')).replace(
+          /<title>[\s\S]*?<\/title>/i,
+          () => {
+            mapTitleReplaced = true
+            return `<title>${escapeHtml(`探索地图 | ${siteConfig.name}`)}</title>`
+          },
+        )
+        if (!mapTitleReplaced) {
+          throw new Error('[ssg-prerender] expected <title> not found for /map')
+        }
+        mapHtml = replaceMetaContent(mapHtml, 'name', 'robots', 'noindex', '/map').html
+        const mapHeadExtras = [
+          mapCss ? `<link rel="stylesheet" href="${escapeAttr(`${base}${mapCss}`)}">` : '',
+          mapJs ? `<link rel="modulepreload" crossorigin href="${escapeAttr(`${base}${mapJs}`)}">` : '',
+        ].join('')
+        mapHtml = injectHeadTags(mapHtml, mapHeadExtras)
+        writeFileSync(path.join(outDir, 'map.html'), mapHtml, 'utf8')
+
+        // 3) 所有单张照片 `/photos/<id>` -> dist/photos/<id>.html
         const photosOutDir = path.join(outDir, 'photos')
         mkdirSync(photosOutDir, { recursive: true })
 
@@ -396,9 +424,9 @@ export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
           totalPhotoBytes += Buffer.byteLength(photoHtml, 'utf8')
         }
 
-        const totalPages = 1 + photos.length
+        const totalPages = 2 + photos.length
         process.stdout.write(
-          `[ssg-prerender] rendered ${totalPages} routes (/, ${photos.length} /photos/*.html; skipped SPA-only: ${Array.from(SKIPPED_PRERENDER_ROUTES).join(', ')}; ${(totalPhotoBytes / 1024 / 1024).toFixed(2)} MB raw) in ${Date.now() - startAt}ms\n`,
+          `[ssg-prerender] rendered ${totalPages} routes (/, /map, ${photos.length} /photos/*.html; skipped SPA-only: ${Array.from(SKIPPED_PRERENDER_ROUTES).join(', ')}; ${(totalPhotoBytes / 1024 / 1024).toFixed(2)} MB raw) in ${Date.now() - startAt}ms\n`,
         )
       }
       finally {

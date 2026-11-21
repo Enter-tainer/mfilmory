@@ -14,7 +14,8 @@ export interface MasonryRef {
 
 const EMPTY_POSITIONER_OPTIONS: UsePositionerOptions = { width: 1, columnCount: 1 }
 
-function computeColumns(
+// eslint-disable-next-line react-refresh/only-export-components
+export function computeColumns(
   width = 0,
   minimumWidth = 200,
   gutter = 0,

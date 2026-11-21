@@ -34,8 +34,8 @@ packages/builder (CLI 流水线)
 apps/web (Vite + React 19 SSG SPA) ←────┘
    manifestInjectPlugin 把 JSON 外置成 photos-manifest.<hash>.json（dev 时内联），
    并把首屏缩略图 preload 写进 HTML；ssgPrerenderPlugin 在 closeBundle 用 entry-server.tsx
-   （从 generated-routes.ts 派生）将 / 与全部 /photos/<id>.html 静态预渲染（含每张照片独立 OG meta，
-   /map 与 /manifest 故意留作纯客户端 SPA 回退，新增未覆盖路由会在构建期失败），
+   （从 generated-routes.ts 派生）将 /、/map（noindex 骨架屏）与全部 /photos/<id>.html 静态预渲染
+   （含每张照片独立 OG meta，/manifest 故意留作纯客户端 SPA 回退，新增未覆盖路由会在构建期失败），
    浏览器首屏直出后由 hydrateRoot 无缝水合，PhotoLoader 读 window.__MANIFEST_URL__
 ```
 
@@ -48,7 +48,7 @@ apps/web (Vite + React 19 SSG SPA) ←────┘
 
 ## 插件（全部在仓库内，没有外部插件目录）
 
-- `apps/web/plugins/vite/*` — SPA 的 Vite 插件：`manifest-inject`（外置 manifest + 首屏图片 preload/preconnect）、`inline-main-css`、`ssg-prerender`（从 `generated-routes.ts` 派生预渲染 `/` 及全部 `/photos/<id>.html`，校验路由全覆盖）、`site-config-inject`、`photos-static`、`og-image-plugin`（构建期 OG + favicon）、`feed-sitemap`、`locales-json`（点号 key 展开）、`i18n-hmr`、`deps`（分包）、`ast`（`tw` 宏）。
+- `apps/web/plugins/vite/*` — SPA 的 Vite 插件：`manifest-inject`（外置 manifest + 首屏图片 preload/preconnect）、`inline-main-css`、`ssg-prerender`（从 `generated-routes.ts` 派生预渲染 `/`、`/map` 及全部 `/photos/<id>.html`，校验路由全覆盖）、`site-config-inject`、`photos-static`、`og-image-plugin`（构建期 OG + favicon）、`feed-sitemap`、`locales-json`（点号 key 展开）、`i18n-hmr`、`deps`（分包）、`ast`（`tw` 宏）。
 - `packages/builder/src/plugins/*` — 流水线插件：`storage/{local,s3,b2,github,eagle}`、`thumbnail-storage`、`geocoding`、`github-repo-sync`、`og-image-storage`。
 - **Cloudflare 分享图插件** = `og-image-storage/vendors/cloudflare-moddleware.ts` + `vendors/templates/cloudflare-middleware.njk`。卡片图就是照片本身（按原图比例、横边上限 1200 的 WebP，不裁切、不画底色/站名/标题），文字由平台原生渲染。`/photos/:id` 的 `og:image`/`twitter:image`/`og:title`/`og:description`/`<title>`/`meta[name=description]` 已在构建期由 `ssg-prerender` 调用 `og-image-storage/photo-text.ts` 直接写进每张照片对应的静态 `photos/<id>.html`，不再经过 Pages Function（直接走静态 CDN 缓存）；边缘中间件只负责把分享弹窗用的 `/og/:photoId` **302** 到 R2 的 `.afilmory/og-images/*.webp`（运行时 manifest 不保留 `ogImageUrl`，靠这个跳转拿图）。`apps/web/public/_routes.json` 的 `include` 只写 `["/og/*"]`。产物是仓库根 `functions/_middleware.ts`（**构建产物，不提交、已被 ignore**；`pnpm build` 时由 builder 重新生成，改模板后可用 `pnpm og:middleware` 单独重生成，`-- --check` 校验磁盘文件是否最新，并校验中间件处理的路径都在 `_routes.json` 的 include 里）。
 - **部署 = Cloudflare Pages 项目 `mgt-afilmory`（生产分支 `main`）**，用仓库里的脚本，别手搓：`pnpm deploy:cloudflare`（构建 + 部署）/ `pnpm deploy:preview`（预览）/ `node scripts/deploy.mjs --skip-build --dry-run`（调试）。脚本必须在**仓库根**执行并以参数传 dist 目录，否则根 `functions/` 不会被打包，OG 改写失效；`apps/web/wrangler.jsonc` 只在 `apps/web` 里部署时生效，别用。中间件缺失**或与模板不一致（`pnpm og:middleware -- --check`）**时部署脚本会先调用 `pnpm og:middleware` 补生成（依赖 `.env` 里的 `S3_CUSTOM_DOMAIN`）。

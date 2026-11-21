@@ -25,6 +25,8 @@
 # 静态预渲染 HTML 页：必须每次校验（走 ETag 304，不经过 Pages Functions），部署后立刻生效
 /
   Cache-Control: public, max-age=0, must-revalidate
+/map
+  Cache-Control: public, max-age=0, must-revalidate
 /*.html
   Cache-Control: public, max-age=0, must-revalidate
 /photos/*
