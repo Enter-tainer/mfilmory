@@ -200,7 +200,7 @@ export function inlineMainCssPlugin(): Plugin {
 
           // 注意用函数式 replacer：字符串形式会把 CSS 里的 `$&` / `$'` / `$1` 当成
           // 替换模式解释，一条 `content: "$&"` 就能把整个文档塞进 <style>。
-          result = result.replace(tag, () => `<style>${css}</style>`)
+          result = result.replace(tag, () => `<style data-inline-main-css="">${css}</style>`)
           inlinedFileNames.add(fileName)
         }
 

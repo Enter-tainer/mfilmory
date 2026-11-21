@@ -33,8 +33,8 @@
 | `site-config-inject.ts` | 注入 `window.__SITE_CONFIG__`（`site.config.ts` + `config.json`） |
 | `photos-static.ts` | 静态站的照片数据 / 路由辅助 |
 | `og-image-plugin.ts` | 构建期生成站点分享图（一张满幅照片）+ 全部 favicon（`logo.jpg` + `sharp`），并写 og/twitter meta |
-| `inline-main-css.ts` | 把主 CSS 内联进首页 `index.html` 消除 render-blocking RTT，并在逐路由 SSG 时保留 `assets/index-*.css` 供子页面外链复用 |
-| `ssg-prerender.ts` | 在 `closeBundle` 用 `src/entry-server.tsx` 对 `/`、`/map`、`/manifest` 与全部 `/photos/<id>.html` 做逐路由 React SSG 预渲染，并调用 `buildPhotoOgText` 为每张照片写入独立 `<title>` 与 OG meta；客户端由 `hydrateRoot` 水合 |
+| `inline-main-css.ts` | 把主 CSS 内联进首页 `index.html`（标 `data-inline-main-css`）消除 render-blocking RTT，并在逐路由 SSG 时保留 `assets/index-*.css` 供子页面外链复用 |
+| `ssg-prerender.ts` | 在 `closeBundle` 基于 `generated-routes.ts`（`src/entry-server.tsx`）对 `/` 与全部 `/photos/<id>.html` 做 React SSG 预渲染（`/map`、`/manifest` 显式保留为纯客户端 SPA 回退，漏配路由会构建报错），并调用 `buildPhotoOgText` 为每张照片写入独立 `<title>` 与 OG meta；客户端由 `hydrateRoot` 水合 |
 | `feed-sitemap.ts` | 生成 `feed.xml` / `sitemap.xml` |
 | `locales-json.ts` | 把 `locales/app/*.json` 的扁平点号 key 展开成嵌套对象（Windows 路径比较已修） |
 | `i18n-hmr.ts` / `locales.ts` | 文案热更新辅助（`locales.ts` 是死代码，上游如此） |
@@ -205,7 +205,7 @@ pnpm lint            # eslint --fix
 **Pages Function 的调用范围由 `_routes.json` 控制，别让它吞掉静态页面**：
 
 - `apps/web/public/_routes.json` 只把 `/og/*` 交给 Pages Function（分享图 302 跳转）。
-  `/`、`/map`、`/manifest` 与全部 `/photos/<id>` 已在构建期通过 Vite SSG 生成静态 `.html` 文件，
+  `/` 与全部 `/photos/<id>` 已在构建期通过 Vite SSG 生成静态 `.html` 文件（`/map` 与 `/manifest` 走 SPA 回退到 `/`），
   直接由静态资源 CDN 返回、可配合 `_headers` 做 `public, max-age=0, must-revalidate` + ETag 304 验证，
   不会触发 Worker/Function 调用（旧方案把 `/photos/*` 也放进 Function，导致每张照片页恒为 `DYNAMIC` 无法缓存）。
   新增需要 Function 的路径时必须同时加进这个 include 列表，否则请求会落到静态资源/SPA 回退
@@ -214,7 +214,7 @@ pnpm lint            # eslint --fix
   `{ version, include: string[], exclude: string[] }` 校验，只写 `include` 会直接让部署失败并报
   `Invalid _routes.json file found`。所以正确写法是
   `{"version": 1, "include": ["/og/*"], "exclude": []}`。
-- `_headers` 按**请求 URL** 匹配，已为 `/`、`/photos/*`、`/map`、`/manifest` 分别声明 `max-age=0, must-revalidate`，
+- `_headers` 按**请求 URL** 匹配，已为 `/`、`/*.html` 与 `/photos/*` 声明 `max-age=0, must-revalidate`，
   `/assets/*`、`/vendor/*`、`/fonts/*` 为一年 immutable。
 - 以后若要给 HTML 加共享缓存，注意 `s-maxage` 会**禁用** `stale-while-revalidate`（RFC 语义：
   s-maxage 隐含 proxy-revalidate），且 `max-age=0` + SWR 允许浏览器 24h 内先渲染旧 HTML——

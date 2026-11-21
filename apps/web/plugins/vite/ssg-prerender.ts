@@ -38,14 +38,35 @@ function readManifest(): RenderedManifest {
   }
 }
 
-function replaceMetaContent(html: string, attrName: string, attrValue: string, nextContent: string): string {
+// 刻意不预渲染 `/map`（纯 WebGL MapLibre，零 JS 只渲染假加载骨架）与 `/manifest`（580 KB 内部调试大表，未入 sitemap）；
+// 二者继续由静态主机回退到 `index.html` 在客户端渲染。新增加入 `generated-routes.ts` 的路由未在此列且未预渲染时会构建失败。
+const SKIPPED_PRERENDER_ROUTES = new Set(['/map', '/manifest'])
+
+function replaceMetaContent(
+  html: string,
+  attrName: string,
+  attrValue: string,
+  nextContent: string,
+  contextLabel: string,
+): { html: string, count: number } {
   const escaped = escapeAttr(nextContent)
-  const re1 = new RegExp(`(<meta\\b[^>]*\\b${attrName}="${attrValue}"[^>]*\\bcontent=")[^"]*("[^>]*>)`, 'gi')
-  const re2 = new RegExp(`(<meta\\b[^>]*\\bcontent=")[^"]*("[^>]*\\b${attrName}="${attrValue}"[^>]*>)`, 'gi')
-  if (re1.test(html)) {
-    return html.replace(re1, (_, prefix: string, suffix: string) => `${prefix}${escaped}${suffix}`)
+  const re1 = new RegExp(`(<meta\\s[^>]*\\b${attrName}="${attrValue}"[^>]*\\bcontent=")[^"]*("[^>]*>)`, 'gi')
+  const re2 = new RegExp(`(<meta\\s[^>]*\\bcontent=")[^"]*("[^>]*\\b${attrName}="${attrValue}"[^>]*>)`, 'gi')
+  let count = 0
+  let next = html.replace(re1, (_, prefix: string, suffix: string) => {
+    count += 1
+    return `${prefix}${escaped}${suffix}`
+  })
+  if (count === 0) {
+    next = next.replace(re2, (_, prefix: string, suffix: string) => {
+      count += 1
+      return `${prefix}${escaped}${suffix}`
+    })
   }
-  return html.replace(re2, (_, prefix: string, suffix: string) => `${prefix}${escaped}${suffix}`)
+  if (count === 0) {
+    throw new Error(`[ssg-prerender] expected <meta ${attrName}="${attrValue}"> not found for ${contextLabel}`)
+  }
+  return { html: next, count }
 }
 
 interface OutputChunkLike {
@@ -65,41 +86,101 @@ type BundleLike = Record<string, OutputChunkLike | OutputAssetLike>
 const stripLeadingImagePreloads = (html: string) =>
   html.replace(/^(?:<link rel="preload" as="image" [^>]+>)+/i, '')
 
-function injectRootHtml(html: string, routePath: string, appHtml: string): string {
-  const next = html.replace(/<html\b[^>]*>/i, tag =>
-    tag.replace(/\blang="[^"]*"/i, 'lang="zh-CN" data-ssr-lng="zh-CN"'))
+function findClosingTagEnd(html: string, fromIdx: number, tagName: string): number {
+  const lower = html.toLowerCase()
+  const closeIdx = lower.indexOf(`</${tagName}`, fromIdx)
+  if (closeIdx === -1) {
+    return html.length
+  }
+  const gt = html.indexOf('>', closeIdx)
+  return gt === -1 ? html.length : gt + 1
+}
 
-  const bodyStart = next.indexOf('<body>')
-  const bodyEnd = next.lastIndexOf('</body>')
-  if (bodyStart === -1 || bodyEnd === -1 || bodyEnd < bodyStart) {
-    throw new Error('[ssg-prerender] cannot locate <body>...</body> in index.html')
+function findRootDivSpan(html: string): { start: number, end: number } {
+  const matches = Array.from(html.matchAll(/<div\s(?:[^>]*\s)?id="root"[^>]*>/gi))
+  if (matches.length !== 1 || matches[0].index === undefined) {
+    throw new Error(`[ssg-prerender] expected exactly 1 <div id="root"> in HTML, found ${matches.length}`)
+  }
+  const start = matches[0].index
+  let pos = start + matches[0][0].length
+  let depth = 1
+
+  while (pos < html.length && depth > 0) {
+    const lt = html.indexOf('<', pos)
+    if (lt === -1) {
+      break
+    }
+    const lowerSlice = html.slice(lt, lt + 10).toLowerCase()
+    if (lowerSlice.startsWith('<!--')) {
+      const endComment = html.indexOf('-->', lt + 4)
+      pos = endComment === -1 ? html.length : endComment + 3
+      continue
+    }
+    if (/^<script(?=[\s/>])/.test(lowerSlice)) {
+      pos = findClosingTagEnd(html, lt + 7, 'script')
+      continue
+    }
+    if (/^<style(?=[\s/>])/.test(lowerSlice)) {
+      pos = findClosingTagEnd(html, lt + 6, 'style')
+      continue
+    }
+    if (/^<div(?=[\s/>])/.test(lowerSlice)) {
+      const gt = html.indexOf('>', lt + 4)
+      if (gt === -1) {
+        break
+      }
+      if (!html.slice(lt, gt + 1).endsWith('/>')) {
+        depth += 1
+      }
+      pos = gt + 1
+      continue
+    }
+    if (/^<\/div(?=[\s/>])/.test(lowerSlice)) {
+      const gt = html.indexOf('>', lt + 5)
+      if (gt === -1) {
+        break
+      }
+      depth -= 1
+      pos = gt + 1
+      if (depth === 0) {
+        return { start, end: pos }
+      }
+      continue
+    }
+    pos = lt + 1
   }
 
+  throw new Error('[ssg-prerender] unbalanced <div id="root"> element in HTML')
+}
+
+function injectRootHtml(html: string, routePath: string, appHtml: string): string {
+  const htmlTagMatch = html.match(/<html\b[^>]*>/i)
+  if (!htmlTagMatch || htmlTagMatch.index === undefined) {
+    throw new Error('[ssg-prerender] missing <html> element in index.html')
+  }
+  const next = html.replace(/<html\b[^>]*>/i, tag =>
+    (/\blang="[^"]*"/i.test(tag)
+      ? tag.replace(/\blang="[^"]*"/i, 'lang="zh-CN" data-ssr-lng="zh-CN"')
+      : tag.replace(/>$/, ' lang="zh-CN" data-ssr-lng="zh-CN">')))
+
+  const rootSpan = findRootDivSpan(next)
+
   // React 19 renderToString 会把非 lazy <img> 的 floatable preload 吐在 appHtml 开头；
-  // 首页与照片页已在 <head> 精确注入对应 preload，map/manifest 不该预加载图片，统一剥离。
+  // 首页与照片页已在 <head> 精确注入对应 preload，统一剥离避免重复预加载。
   const cleanedAppHtml = stripLeadingImagePreloads(appHtml)
-  return `${next.slice(0, bodyStart)}<body><div id="root" data-ssg-route="${escapeAttr(routePath)}">${cleanedAppHtml}</div>${next.slice(bodyEnd)}`
+  return `${next.slice(0, rootSpan.start)}<div id="root" data-ssg-route="${escapeAttr(routePath)}">${cleanedAppHtml}</div>${next.slice(rootSpan.end)}`
 }
 
 function replaceMainInlinedCssWithLink(html: string, mainCssFile: string | undefined, base: string): string {
   if (!mainCssFile) {
-    return html
+    throw new Error('[ssg-prerender] missing main index CSS asset in bundle for SSG subpages')
   }
-  // 匹配 <head> 里最大的 <style>（主 Tailwind CSS），保留 Geist @font-face 的短 <style>
-  let largestMatch: { start: number, end: number } | null = null
-  let largestLen = 0
-  for (const match of html.matchAll(/<style[^>]*>[\s\S]*?<\/style>/g)) {
-    const full = match[0]
-    const index = match.index ?? -1
-    if (index !== -1 && full.length > 10000 && full.length > largestLen) {
-      largestLen = full.length
-      largestMatch = { start: index, end: index + full.length }
-    }
+  const matches = Array.from(html.matchAll(/<style\s[^>]*data-inline-main-css[^>]*>[\s\S]*?<\/style>/gi))
+  if (matches.length !== 1 || matches[0].index === undefined) {
+    throw new Error(`[ssg-prerender] expected exactly 1 <style data-inline-main-css> tag, found ${matches.length}`)
   }
-  if (!largestMatch) {
-    return html
-  }
-  return `${html.slice(0, largestMatch.start)}<link rel="stylesheet" href="${escapeAttr(`${base}${mainCssFile}`)}">${html.slice(largestMatch.end)}`
+  const match = matches[0]
+  return `${html.slice(0, match.index)}<link rel="stylesheet" href="${escapeAttr(`${base}${mainCssFile}`)}">${html.slice(match.index + match[0].length)}`
 }
 
 function injectHeadTags(html: string, tags: string): string {
@@ -120,8 +201,6 @@ export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
   let mainCss: string | undefined
   let photoJs: string | undefined
   let photoCss: string | undefined
-  let mapJs: string | undefined
-  let manifestJs: string | undefined
 
   return {
     name: 'afilmory:ssg-prerender',
@@ -140,8 +219,6 @@ export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
       mainCss = undefined
       photoJs = undefined
       photoCss = undefined
-      mapJs = undefined
-      manifestJs = undefined
 
       for (const item of Object.values(bundle as unknown as BundleLike)) {
         if (item.type === 'asset') {
@@ -154,12 +231,6 @@ export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
         if (facade.endsWith('/pages/(main)/photos/[photoId]/index.tsx')) {
           photoJs = item.fileName
           photoCss = Array.from(item.viteMetadata?.importedCss ?? []).find(f => f.endsWith('.css'))
-        }
-        else if (facade.endsWith('/pages/map/index.tsx')) {
-          mapJs = item.fileName
-        }
-        else if (facade.endsWith('/pages/(data)/manifest.tsx')) {
-          manifestJs = item.fileName
         }
       }
     },
@@ -210,12 +281,30 @@ export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
         const entryUrl = pathToFileURL(path.join(tmpDir, 'entry-server.mjs')).href
         const serverMod = (await import(entryUrl)) as {
           initSsrContext: (manifest: RenderedManifest) => Promise<void>
+          getDiscoveredRoutePaths: () => string[]
           renderRoute: (urlPath: string) => Promise<string>
         }
 
         const manifest = readManifest()
         const photos = Array.isArray(manifest.data) ? manifest.data : []
         await serverMod.initSsrContext(manifest)
+
+        const discoveredRoutes = serverMod.getDiscoveredRoutePaths()
+        const renderedPatterns = new Set(['/', '/photos/:photoId'])
+        for (const route of discoveredRoutes) {
+          if (!renderedPatterns.has(route) && !SKIPPED_PRERENDER_ROUTES.has(route)) {
+            throw new Error(
+              `[ssg-prerender] route "${route}" from generated-routes.ts is neither pre-rendered nor listed in SKIPPED_PRERENDER_ROUTES`,
+            )
+          }
+        }
+        for (const skipped of SKIPPED_PRERENDER_ROUTES) {
+          if (!discoveredRoutes.includes(skipped)) {
+            throw new Error(
+              `[ssg-prerender] stale entry "${skipped}" in SKIPPED_PRERENDER_ROUTES (not present in generated-routes.ts)`,
+            )
+          }
+        }
 
         const indexHtmlPath = path.join(outDir, 'index.html')
         const baseIndexHtml = readFileSync(indexHtmlPath, 'utf8')
@@ -230,29 +319,7 @@ export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
         const homeHtml = injectRootHtml(baseIndexHtml, '/', await serverMod.renderRoute('/'))
         writeFileSync(indexHtmlPath, homeHtml, 'utf8')
 
-        // 2) `/map` -> dist/map.html
-        const mapAppHtml = await serverMod.renderRoute('/map')
-        let mapHtml = injectRootHtml(subPageTemplate, '/map', mapAppHtml)
-        if (mapJs) {
-          mapHtml = injectHeadTags(
-            mapHtml,
-            `<link rel="modulepreload" crossorigin href="${escapeAttr(`${base}${mapJs}`)}">`,
-          )
-        }
-        writeFileSync(path.join(outDir, 'map.html'), mapHtml, 'utf8')
-
-        // 3) `/manifest` -> dist/manifest.html
-        const manifestAppHtml = await serverMod.renderRoute('/manifest')
-        let manifestHtml = injectRootHtml(subPageTemplate, '/manifest', manifestAppHtml)
-        if (manifestJs) {
-          manifestHtml = injectHeadTags(
-            manifestHtml,
-            `<link rel="modulepreload" crossorigin href="${escapeAttr(`${base}${manifestJs}`)}">`,
-          )
-        }
-        writeFileSync(path.join(outDir, 'manifest.html'), manifestHtml, 'utf8')
-
-        // 4) 所有单张照片 `/photos/<id>` -> dist/photos/<id>.html
+        // 2) 所有单张照片 `/photos/<id>` -> dist/photos/<id>.html
         const photosOutDir = path.join(outDir, 'photos')
         mkdirSync(photosOutDir, { recursive: true })
 
@@ -267,18 +334,42 @@ export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
           const pageUrl = siteConfig.url ? new URL(routePath, siteConfig.url).href : routePath
 
           let photoHtml = injectRootHtml(subPageTemplate, routePath, photoAppHtml)
-          photoHtml = photoHtml.replace(/<title>[\s\S]*?<\/title>/i, () =>
-            `<title>${escapeHtml(`${ogText.title} | ${siteConfig.name}`)}</title>`)
-          photoHtml = replaceMetaContent(photoHtml, 'name', 'description', ogText.summary)
-          photoHtml = replaceMetaContent(photoHtml, 'property', 'og:title', ogText.title)
-          photoHtml = replaceMetaContent(photoHtml, 'property', 'og:description', ogText.description)
-          photoHtml = replaceMetaContent(photoHtml, 'property', 'og:url', pageUrl)
-          photoHtml = replaceMetaContent(photoHtml, 'property', 'twitter:title', ogText.title)
-          photoHtml = replaceMetaContent(photoHtml, 'property', 'twitter:description', ogText.description)
-          photoHtml = replaceMetaContent(photoHtml, 'property', 'twitter:url', pageUrl)
+          let metaReplacements = 0
+
+          let titleReplaced = false
+          photoHtml = photoHtml.replace(/<title>[\s\S]*?<\/title>/i, () => {
+            titleReplaced = true
+            metaReplacements += 1
+            return `<title>${escapeHtml(`${ogText.title} | ${siteConfig.name}`)}</title>`
+          })
+          if (!titleReplaced) {
+            throw new Error(`[ssg-prerender] expected <title> not found for ${photo.id}`)
+          }
+
+          const metaUpdates: Array<[string, string, string]> = [
+            ['name', 'description', ogText.summary],
+            ['property', 'og:title', ogText.title],
+            ['property', 'og:description', ogText.description],
+            ['property', 'og:url', pageUrl],
+            ['property', 'twitter:title', ogText.title],
+            ['property', 'twitter:description', ogText.description],
+            ['property', 'twitter:url', pageUrl],
+          ]
           if (ogImageUrl) {
-            photoHtml = replaceMetaContent(photoHtml, 'property', 'og:image', ogImageUrl)
-            photoHtml = replaceMetaContent(photoHtml, 'property', 'twitter:image', ogImageUrl)
+            metaUpdates.push(['property', 'og:image', ogImageUrl], ['property', 'twitter:image', ogImageUrl])
+          }
+
+          for (const [attrName, attrValue, content] of metaUpdates) {
+            const res = replaceMetaContent(photoHtml, attrName, attrValue, content, photo.id)
+            photoHtml = res.html
+            metaReplacements += res.count
+          }
+
+          const expectedReplacements = 1 + metaUpdates.length
+          if (metaReplacements !== expectedReplacements) {
+            throw new Error(
+              `[ssg-prerender] expected ${expectedReplacements} head meta replacements for ${photo.id}, got ${metaReplacements}`,
+            )
           }
 
           const headExtras = [
@@ -295,9 +386,9 @@ export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
           totalPhotoBytes += Buffer.byteLength(photoHtml, 'utf8')
         }
 
-        const totalPages = 3 + photos.length
+        const totalPages = 1 + photos.length
         process.stdout.write(
-          `[ssg-prerender] rendered ${totalPages} routes (/, /map, /manifest, ${photos.length} /photos/*.html, ${(totalPhotoBytes / 1024 / 1024).toFixed(2)} MB raw) in ${Date.now() - startAt}ms\n`,
+          `[ssg-prerender] rendered ${totalPages} routes (/, ${photos.length} /photos/*.html; skipped SPA-only: ${Array.from(SKIPPED_PRERENDER_ROUTES).join(', ')}; ${(totalPhotoBytes / 1024 / 1024).toFixed(2)} MB raw) in ${Date.now() - startAt}ms\n`,
         )
       }
       finally {

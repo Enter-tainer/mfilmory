@@ -9,75 +9,72 @@ import type { RouteObject } from 'react-router'
 import { createStaticHandler, createStaticRouter, StaticRouterProvider } from 'react-router'
 
 import { defaultNS, ns } from './@types/constants'
-import App from './App'
-import { ErrorElement } from './components/common/ErrorElement'
-import { NotFound } from './components/common/NotFound'
 import { i18nAtom } from './i18n'
 import { jotaiStore } from './lib/jotai'
 import { SSR_DEFAULT_LNG } from './lib/ssr'
-import * as ManifestRoute from './pages/(data)/manifest'
-import * as MainLayout from './pages/(main)/layout.sync'
-import * as PhotoDetailRoute from './pages/(main)/photos/[photoId]/index'
-import * as MapRoute from './pages/map/index'
+import { createAppRoutes } from './router'
 
-const serverRoutes: RouteObject[] = [
-  {
-    path: '/',
-    element: <App />,
-    errorElement: <ErrorElement />,
-    children: [
-      {
-        path: 'map',
-        children: [
-          {
-            path: '',
-            Component: MapRoute.Component,
-          },
-        ],
-      },
-      {
-        path: '',
-        Component: MainLayout.Component,
-        children: [
-          {
-            path: 'photos',
-            children: [
-              {
-                path: ':photoId',
-                children: [
-                  {
-                    path: '',
-                    Component: PhotoDetailRoute.Component,
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-      {
-        path: '',
-        children: [
-          {
-            path: 'manifest',
-            Component: ManifestRoute.Component,
-          },
-        ],
-      },
-    ],
-  },
-  {
-    path: '*',
-    element: <NotFound />,
-  },
-]
+type LazyRouteObject = RouteObject & { lazy?: (() => Promise<Record<string, unknown>>) | unknown }
 
-const handler = createStaticHandler(serverRoutes)
+async function resolveAllLazyRoutes(routes: RouteObject[]): Promise<void> {
+  await Promise.all(
+    routes.map(async (route) => {
+      const lazyRoute = route as LazyRouteObject
+      if (typeof lazyRoute.lazy === 'function') {
+        const resolved = await lazyRoute.lazy()
+        Object.assign(lazyRoute, resolved)
+        delete lazyRoute.lazy
+      }
+      if (route.children && route.children.length > 0) {
+        await resolveAllLazyRoutes(route.children)
+      }
+    }),
+  )
+}
+
+function joinRoutePaths(basePath: string, segment: string | undefined): string {
+  const cleanSegment = (segment ?? '').replaceAll(/^\/+|\/+$/g, '')
+  if (!cleanSegment) {
+    return basePath || '/'
+  }
+  const cleanBase = basePath === '/' ? '' : basePath.replace(/\/+$/, '')
+  return `${cleanBase}/${cleanSegment}`
+}
+
+function collectDiscoveredRoutePaths(appRoutes: RouteObject[]): string[] {
+  const discovered = new Set<string>()
+  const rootWrapper = appRoutes.find(route => route.path === '/')
+  const walk = (routes: RouteObject[], parentPath: string) => {
+    for (const route of routes) {
+      if (route.path === '*') {
+        continue
+      }
+      const nextPath = route.index ? (parentPath || '/') : joinRoutePaths(parentPath, route.path)
+      if (route.Component || route.element) {
+        discovered.add(nextPath)
+      }
+      if (route.children && route.children.length > 0) {
+        walk(route.children, nextPath)
+      }
+    }
+  }
+  walk(rootWrapper?.children ?? appRoutes, '/')
+  return Array.from(discovered)
+}
+
+let handler: ReturnType<typeof createStaticHandler> | null = null
+let discoveredRoutePaths: string[] = []
 const ssrI18n = i18next.createInstance()
 let i18nInitialized = false
 
 export async function initSsrContext(manifest: PhotoManifestPayload): Promise<void> {
   photoLoader.init(manifest)
+  if (!handler) {
+    const appRoutes = createAppRoutes()
+    await resolveAllLazyRoutes(appRoutes)
+    discoveredRoutePaths = collectDiscoveredRoutePaths(appRoutes)
+    handler = createStaticHandler(appRoutes)
+  }
   if (!i18nInitialized) {
     await ssrI18n.use(initReactI18next).init({
       lng: SSR_DEFAULT_LNG,
@@ -101,7 +98,17 @@ export async function initSsrContext(manifest: PhotoManifestPayload): Promise<vo
   }
 }
 
+export function getDiscoveredRoutePaths(): string[] {
+  if (!handler) {
+    throw new Error('[entry-server] initSsrContext() must be called before getDiscoveredRoutePaths()')
+  }
+  return [...discoveredRoutePaths]
+}
+
 export async function renderRoute(urlPath: string): Promise<string> {
+  if (!handler) {
+    throw new Error('[entry-server] initSsrContext() must be called before renderRoute()')
+  }
   const request = new Request(`https://ssg.local${urlPath}`)
   const context = await handler.query(request)
   if (context instanceof Response) {

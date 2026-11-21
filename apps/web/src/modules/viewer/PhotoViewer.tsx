@@ -469,6 +469,17 @@ export const PhotoViewer = ({
                     >
                       {/* 左侧工具按钮 */}
                       <div className="flex items-center gap-2">
+                        {/* 无 JS 场景下页面未渲染顶部栏，提供回到画廊入口 */}
+                        <noscript>
+                          <a
+                            href="/"
+                            className="bg-material-ultra-thick pointer-events-auto inline-flex h-8 items-center gap-1.5 rounded-full border border-white/10 px-3 text-xs font-medium text-white backdrop-blur-2xl duration-200 hover:border-white/15 hover:bg-black/40"
+                          >
+                            <i className="i-mingcute-left-line text-sm" aria-hidden="true" />
+                            <span>{siteConfig.name}</span>
+                          </a>
+                        </noscript>
+
                         {/* 信息按钮 - 在移动设备上显示 */}
                         {isMobile && (
                           <ActionButton
@@ -532,14 +543,25 @@ export const PhotoViewer = ({
                           </ActionButton>
                         )}
 
-                        {/* 关闭按钮 */}
-                        <ActionButton
-                          disabled={!isMobileChromeInteractive}
-                          className={mobileChromeButtonClassName}
-                          onClick={handleCloseRequest}
-                        >
-                          <i className="i-mingcute-close-line" />
-                        </ActionButton>
+                        {/* 关闭按钮：未水合前用原生 <a href="/"> 保证零 JS / 慢 JS 可直接返回画廊 */}
+                        {isClient ? (
+                          <ActionButton
+                            disabled={!isMobileChromeInteractive}
+                            className={mobileChromeButtonClassName}
+                            aria-label={t('action.close')}
+                            onClick={handleCloseRequest}
+                          >
+                            <i className="i-mingcute-close-line" />
+                          </ActionButton>
+                        ) : (
+                          <a
+                            href="/"
+                            aria-label={t('action.close')}
+                            className="bg-material-ultra-thick pointer-events-auto inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-white/10 text-white backdrop-blur-2xl duration-200 hover:border-white/15 hover:bg-black/40"
+                          >
+                            <i className="i-mingcute-close-line" />
+                          </a>
+                        )}
                       </div>
                     </m.div>
 

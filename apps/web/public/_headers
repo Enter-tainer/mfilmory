@@ -29,7 +29,3 @@
   Cache-Control: public, max-age=0, must-revalidate
 /photos/*
   Cache-Control: public, max-age=0, must-revalidate
-/map
-  Cache-Control: public, max-age=0, must-revalidate
-/manifest
-  Cache-Control: public, max-age=0, must-revalidate

@@ -1,5 +1,6 @@
 import { useAtomValue } from 'jotai'
 import type { RenderComponentProps } from 'masonic'
+import type { CSSProperties } from 'react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { gallerySettingAtom } from '~/atoms/app'
@@ -13,6 +14,7 @@ import { MasonryPhotoItem } from './MasonryPhotoItem'
 
 const SSR_GRID_PHOTO_COUNT = 36
 const SSR_EAGER_IMAGE_COUNT = 4
+const MASONRY_GUTTER = 4
 
 const COLUMN_WIDTH_CONFIG = {
   auto: {
@@ -103,8 +105,9 @@ export const MasonryView = ({ photos, onRender }: MasonryViewProps) => {
       render={renderMasonryItem}
       onRender={onRender}
       columnWidth={columnWidth}
-      columnGutter={4}
-      rowGutter={4}
+      maxColumnCount={columns === 'auto' && !isMobile ? COLUMN_WIDTH_CONFIG.auto.maxColumns : undefined}
+      columnGutter={MASONRY_GUTTER}
+      rowGutter={MASONRY_GUTTER}
       itemHeightEstimate={400}
       // masonic 的渲染带是 `[scrollTop − 0.5·h·k, scrollTop + h·k]`（`use-masonry.js:99,104`，
       // 源码注释：只向**上**过扫一半的量），k = overscanBy，h = 视口高度。注意是「下多上少」：
@@ -138,29 +141,125 @@ export const MasonryView = ({ photos, onRender }: MasonryViewProps) => {
 
 const MasonryItem = memo(MasonryPhotoItem)
 
+interface SsrBandPlacement {
+  items: Array<{ col: number, s: number, r: number }>
+  maxS: number
+  maxR: number
+}
+
+// 对应 masonic getColumns(W, columnWidth, 4) 的真实切列断点：
+// 移动端 (<1024px) W = vw - 8, columnWidth = 150 -> cols 1..6；
+// 桌面端 (>=1024px) W = vw, columnWidth = 250, maxColumns = 8 -> cols 4..8。
+const SSR_BANDS: ReadonlyArray<{ cols: number, repW: number, media: string }> = [
+  { cols: 1, repW: 280, media: '(max-width:311.98px)' },
+  { cols: 2, repW: 382, media: '(min-width:312px) and (max-width:465.98px)' },
+  { cols: 3, repW: 530, media: '(min-width:466px) and (max-width:619.98px)' },
+  { cols: 4, repW: 690, media: '(min-width:620px) and (max-width:773.98px)' },
+  { cols: 5, repW: 840, media: '(min-width:774px) and (max-width:927.98px)' },
+  { cols: 6, repW: 960, media: '(min-width:928px) and (max-width:1023.98px)' },
+  { cols: 4, repW: 1140, media: '(min-width:1024px) and (max-width:1265.98px)' },
+  { cols: 5, repW: 1400, media: '(min-width:1266px) and (max-width:1519.98px)' },
+  { cols: 6, repW: 1640, media: '(min-width:1520px) and (max-width:1773.98px)' },
+  { cols: 7, repW: 1920, media: '(min-width:1774px) and (max-width:2027.98px)' },
+  { cols: 8, repW: 2560, media: '(min-width:2028px)' },
+]
+
+function computeMasonicPlacement(photos: PhotoManifest[], cols: number, repW: number): SsrBandPlacement {
+  const colW = Math.floor((repW - MASONRY_GUTTER * (cols - 1)) / cols)
+  const heights = Array.from<number>({ length: cols }).fill(0)
+  const sArr = Array.from<number>({ length: cols }).fill(0)
+  const rArr = Array.from<number>({ length: cols }).fill(0)
+  const items: Array<{ col: number, s: number, r: number }> = []
+
+  for (const photo of photos) {
+    let targetCol = 0
+    for (let c = 1; c < cols; c += 1) {
+      if (heights[c] < heights[targetCol]) {
+        targetCol = c
+      }
+    }
+    const ar = photo.aspectRatio > 0 ? photo.aspectRatio : 1
+    const invAr = 1 / ar
+    items.push({ col: targetCol, s: sArr[targetCol], r: rArr[targetCol] })
+    sArr[targetCol] += invAr
+    rArr[targetCol] += 1
+    heights[targetCol] += Math.round(colW * invAr) + MASONRY_GUTTER
+  }
+
+  let tallestCol = 0
+  for (let c = 1; c < cols; c += 1) {
+    if (heights[c] > heights[tallestCol]) {
+      tallestCol = c
+    }
+  }
+  return {
+    items,
+    maxS: sArr[tallestCol],
+    maxR: rArr[tallestCol],
+  }
+}
+
+function buildSsrMasonryCss(photos: PhotoManifest[]): string {
+  const base
+    = `.ssr-m{container-type:inline-size;position:relative;width:100%;height:calc(var(--ms)*var(--cw) + var(--mr)*${MASONRY_GUTTER}px)}`
+      + `.ssr-m>a{position:absolute;width:var(--cw);height:calc(var(--ia)*var(--cw));left:calc(var(--c)*(var(--cw) + ${MASONRY_GUTTER}px));top:calc(var(--s)*var(--cw) + var(--r)*${MASONRY_GUTTER}px)}`
+
+  // 合并列分布完全相同的响应式分段（如 mob-4 与 dsk-4），减小内联 CSS 体积
+  const merged = new Map<string, { cols: number, mediaParts: string[], placement: SsrBandPlacement }>()
+  for (const band of SSR_BANDS) {
+    const placement = computeMasonicPlacement(photos, band.cols, band.repW)
+    const sig = `${band.cols}:${placement.items.map(it => it.col).join(',')}`
+    const existing = merged.get(sig)
+    if (existing) {
+      existing.mediaParts.push(band.media)
+    }
+    else {
+      merged.set(sig, { cols: band.cols, mediaParts: [band.media], placement })
+    }
+  }
+
+  let rules = base
+  for (const { cols, mediaParts, placement } of merged.values()) {
+    const gutterTotal = (cols - 1) * MASONRY_GUTTER
+    const cwFallback = `calc((100cqw - ${gutterTotal}px)/${cols})`
+    const cwFloored = `round(down,(100cqw - ${gutterTotal}px)/${cols},1px)`
+    let block = `.ssr-m{--cw:${cwFallback};--cw:${cwFloored};--ms:${placement.maxS.toFixed(4)};--mr:${placement.maxR}}`
+    for (let i = 0; i < placement.items.length; i += 1) {
+      const it = placement.items[i]
+      block += `.ssr-m>a:nth-of-type(${i + 1}){--c:${it.col};--s:${it.s.toFixed(4)};--r:${it.r}}`
+    }
+    rules += `@media ${mediaParts.join(',')}{${block}}`
+  }
+  return rules
+}
+
 function SsrPhotoGrid({ photos }: { photos: PhotoManifest[] }) {
+  const ssrCss = useMemo(() => buildSsrMasonryCss(photos), [photos])
+
   return (
-    <div
-      key="ssr-grid"
-      className="grid grid-cols-2 items-start gap-1 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7"
-    >
-      {photos.map((photo, index) => (
-        <a
-          key={photo.id}
-          href={`/photos/${encodeURIComponent(photo.id)}`}
-          className="bg-fill-quaternary relative block w-full overflow-hidden"
-          style={{ aspectRatio: photo.aspectRatio }}
-        >
-          <img
-            src={photo.thumbnailUrl}
-            alt={photo.title}
-            loading={index < SSR_EAGER_IMAGE_COUNT ? 'eager' : 'lazy'}
-            fetchPriority={index < SSR_EAGER_IMAGE_COUNT ? 'high' : undefined}
-            decoding="async"
-            className="absolute inset-0 h-full w-full object-cover"
-          />
-        </a>
-      ))}
+    <div key="ssr-grid" className="ssr-m">
+      {/* eslint-disable-next-line react-dom/no-dangerously-set-innerhtml */}
+      <style dangerouslySetInnerHTML={{ __html: ssrCss }} />
+      {photos.map((photo, index) => {
+        const ar = photo.aspectRatio > 0 ? photo.aspectRatio : 1
+        return (
+          <a
+            key={photo.id}
+            href={`/photos/${encodeURIComponent(photo.id)}`}
+            className="bg-fill-quaternary block overflow-hidden"
+            style={{ '--ia': Number((1 / ar).toFixed(6)) } as CSSProperties}
+          >
+            <img
+              src={photo.thumbnailUrl}
+              alt={photo.title}
+              loading={index < SSR_EAGER_IMAGE_COUNT ? 'eager' : 'lazy'}
+              fetchPriority={index < SSR_EAGER_IMAGE_COUNT ? 'high' : undefined}
+              decoding="async"
+              className="h-full w-full object-cover"
+            />
+          </a>
+        )
+      })}
     </div>
   )
 }
