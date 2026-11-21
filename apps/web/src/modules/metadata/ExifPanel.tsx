@@ -20,6 +20,7 @@ import {
   TablerAperture,
 } from '~/icons'
 import { convertExifGPSToDecimal } from '~/lib/map-utils'
+import { useIsClient } from '~/lib/ssr'
 import { getRenderablePhotoRegions } from '~/modules/viewer/photo-region-bounds'
 
 import { Row } from './ExifRow'
@@ -45,6 +46,7 @@ interface ExifPanelBaseProps {
 interface ExifPanelProps extends ExifPanelBaseProps {
   onClose?: () => void
   visible?: boolean
+  disableEntryTransition?: boolean
 }
 
 export const ExifPanel: FC<ExifPanelProps> = ({
@@ -54,8 +56,10 @@ export const ExifPanel: FC<ExifPanelProps> = ({
   onActiveRegionChange,
   onClose,
   visible = true,
+  disableEntryTransition = false,
 }) => {
   const { t } = useTranslation()
+  const isClient = useIsClient()
   const isMobile = useMobile()
   const isExiftoolLoaded = useAtomValue(isExiftoolLoadedAtom)
 
@@ -63,13 +67,17 @@ export const ExifPanel: FC<ExifPanelProps> = ({
     <m.div
       className={`${
         isMobile
-          ? 'exif-panel-mobile fixed right-0 bottom-0 left-0 z-10 max-h-[60vh] w-full rounded-t-2xl backdrop-blur-2xl'
-          : 'relative w-80 shrink-0 backdrop-blur-2xl'
-      } border-accent/20 flex flex-col text-white`}
-      initial={{
-        opacity: 0,
-        ...(isMobile ? { y: 100 } : { x: 100 }),
-      }}
+          ? 'exif-panel-mobile fixed right-0 bottom-0 left-0 z-10 flex max-h-[60vh] w-full rounded-t-2xl backdrop-blur-2xl'
+          : 'relative hidden w-80 shrink-0 backdrop-blur-2xl lg:flex'
+      } border-accent/20 flex-col text-white`}
+      initial={
+        disableEntryTransition
+          ? false
+          : {
+              opacity: 0,
+              ...(isMobile ? { y: 100 } : { x: 100 }),
+            }
+      }
       animate={{
         opacity: visible ? 1 : 0,
         ...(isMobile ? { y: visible ? 0 : 100 } : { x: visible ? 0 : 100 }),
@@ -97,7 +105,7 @@ export const ExifPanel: FC<ExifPanelProps> = ({
       />
       <div className="relative z-10 mb-4 flex shrink-0 items-center justify-between p-4 pb-0">
         <h3 className={`${isMobile ? 'text-base' : 'text-lg'} font-semibold`}>{t('exif.header.title')}</h3>
-        {!isMobile && isExiftoolLoaded && <RawExifViewer currentPhoto={currentPhoto} />}
+        {isClient && !isMobile && isExiftoolLoaded && <RawExifViewer currentPhoto={currentPhoto} />}
         {isMobile && onClose && (
           <button
             type="button"
@@ -135,6 +143,7 @@ export const ExifPanelContent: FC<ExifPanelContentProps> = ({
   viewportClassName = 'px-4 pb-4 **:select-text',
 }) => {
   const { t } = useTranslation()
+  const isClient = useIsClient()
   const isMobile = useMobile()
   const formattedExifData = useMemo(() => formatExifData(exifData), [exifData])
   const regions = useMemo(
@@ -453,9 +462,13 @@ export const ExifPanelContent: FC<ExifPanelContentProps> = ({
                 )}
 
                 {decimalLatitude !== null && decimalLongitude !== null && (
-                  <Suspense fallback={<div className="h-40 w-full animate-pulse rounded-lg bg-white/5" />}>
-                    <MiniMap latitude={decimalLatitude} longitude={decimalLongitude} photoId={currentPhoto.id} />
-                  </Suspense>
+                  isClient ? (
+                    <Suspense fallback={<div className="h-40 w-full animate-pulse rounded-lg bg-white/5" />}>
+                      <MiniMap latitude={decimalLatitude} longitude={decimalLongitude} photoId={currentPhoto.id} />
+                    </Suspense>
+                  ) : (
+                    <div className="h-40 w-full animate-pulse rounded-lg bg-white/5" />
+                  )
                 )}
               </ExifSection>
             )}

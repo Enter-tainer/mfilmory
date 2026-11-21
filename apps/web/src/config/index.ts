@@ -3,7 +3,7 @@ import defaultSiteConfig from '@config'
 import { merge } from 'es-toolkit/compat'
 
 const getInjectedSiteConfig = (): Partial<SiteConfig> | undefined => {
-  if (window.__SITE_CONFIG__) {
+  if (typeof window !== 'undefined' && window.__SITE_CONFIG__) {
     return window.__SITE_CONFIG__
   }
 

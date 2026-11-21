@@ -2,12 +2,15 @@ import './styles/index.css'
 
 import { photoLoader } from '@afilmory/data'
 import { Suspense } from 'react'
-import { createRoot } from 'react-dom/client'
+import { createRoot, hydrateRoot } from 'react-dom/client'
+import type { RouteObject } from 'react-router'
+import { matchRoutes } from 'react-router'
 import { RouterProvider } from 'react-router/dom'
 
 import { AppSkeleton } from './components/ui/app-skeleton'
-import { i18nReady } from './i18n'
-import { router } from './router'
+import { initClientI18n } from './i18n'
+import { SSR_DEFAULT_LNG } from './lib/ssr'
+import { createAppRouter, createAppRoutes } from './router'
 
 type ManifestPayload = Parameters<typeof photoLoader.init>[0]
 
@@ -39,16 +42,76 @@ async function resolveManifest(): Promise<ManifestPayload> {
   }
 }
 
+async function resolveMatchedLazyRoutes(appRoutes: RouteObject[]) {
+  const matches = matchRoutes(appRoutes, window.location)
+  if (!matches) {
+    return
+  }
+  await Promise.all(
+    matches.map(async (match) => {
+      const route = match.route as RouteObject & { lazy?: (() => Promise<Record<string, unknown>>) | unknown }
+      if (typeof route.lazy !== 'function') {
+        return
+      }
+      const resolved = await route.lazy()
+      Object.assign(route, resolved)
+      delete route.lazy
+    }),
+  )
+}
+
+const normalizePath = (pathname: string) => {
+  const decoded = (() => {
+    try {
+      return decodeURIComponent(pathname)
+    }
+    catch {
+      return pathname
+    }
+  })()
+  return decoded.length > 1 ? decoded.replace(/\/+$/, '') : decoded
+}
+
 // 不要用 top-level await：那会让 rolldown 把整张模块图拆成一堆 async chunk
 // （modulepreload 从 3 条涨到 10 条），反而拖慢首屏。这里的 bootstrap() 同步调用，
-// 只是把「渲染」推迟到 manifest 到手之后。
+// 只是把「渲染」推迟到 manifest 与 i18n 到手之后。
 void bootstrap()
 
 async function bootstrap() {
-  const [manifest] = await Promise.all([resolveManifest(), i18nReady])
+  const rootEl = document.querySelector('#root')!
+  const ssgRoute = rootEl.getAttribute('data-ssg-route')
+  const currentRoute = normalizePath(window.location.pathname)
+  const canHydrate = Boolean(
+    ssgRoute
+    && rootEl.childNodes.length > 0
+    && normalizePath(ssgRoute) === currentRoute
+    && !(currentRoute === '/' && window.location.search.length > 0),
+  )
+
+  const ssrLng = canHydrate ? (document.documentElement.dataset.ssrLng || SSR_DEFAULT_LNG) : undefined
+  const appRoutes = createAppRoutes()
+
+  const [manifest] = await Promise.all([
+    resolveManifest(),
+    initClientI18n(ssrLng ? { ssrLng } : undefined),
+    canHydrate ? resolveMatchedLazyRoutes(appRoutes) : Promise.resolve(),
+  ])
   photoLoader.init(manifest)
 
-  createRoot(document.querySelector('#root')!).render(
+  const router = createAppRouter(appRoutes)
+
+  document.querySelector('#ssg-fallback-hide')?.remove()
+
+  if (canHydrate) {
+    hydrateRoot(rootEl, <RouterProvider router={router} />, {
+      onRecoverableError(error) {
+        console.error('[hydration]', error)
+      },
+    })
+    return
+  }
+
+  createRoot(rootEl).render(
     <Suspense fallback={<AppSkeleton />}>
       <RouterProvider router={router} />
     </Suspense>,

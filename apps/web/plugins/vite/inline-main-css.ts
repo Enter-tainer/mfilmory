@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import process from 'node:process'
 
 import type { Plugin } from 'vite'
 
@@ -15,14 +16,19 @@ import type { Plugin } from 'vite'
  * `plugins` 目录，插件代码根本不参与类型检查。直到它与「把 plugins 目录纳入 type-check」
  * 的改动一起合入，`vite build` 里的 `vite-plugin-checker` 才把这个错误变成构建失败。
  */
-type OutputFileLike =
-  | {
-    type: 'chunk'
-    code?: string
-    /** Vite 在 chunk 上挂的元信息；只有 `importedCss` 会被本插件改写 */
-    viteMetadata?: { importedCss?: Set<string> | string[] }
-  }
-  | { type: 'asset', source: string | Uint8Array }
+interface OutputChunkLike {
+  type: 'chunk'
+  code?: string
+  /** Vite 在 chunk 上挂的元信息；只有 `importedCss` 会被本插件改写 */
+  viteMetadata?: { importedCss?: Set<string> | string[] }
+}
+
+interface OutputAssetLike {
+  type: 'asset'
+  source: string | Uint8Array
+}
+
+type OutputFileLike = OutputChunkLike | OutputAssetLike
 
 type BundleLike = Record<string, OutputFileLike>
 
@@ -88,6 +94,8 @@ export function inlineMainCssPlugin(): Plugin {
   let base = '/'
   /** `INLINE_MAIN_CSS=0` 用来生成「不内联」的参照产物，供差分断言使用 */
   const enabled = process.env.INLINE_MAIN_CSS !== '0'
+  /** 逐路由 SSG 子页面（`/photos/*`、`/map`、`/manifest`）外链引用同一个 `assets/index-*.css`（1 年 immutable），避免 369 份 HTML 各自内联 215 KB。 */
+  const keepAssetForSsg = process.env.SSG_PRERENDER !== '0'
 
   return {
     name: 'afilmory:inline-main-css',
@@ -192,13 +200,16 @@ export function inlineMainCssPlugin(): Plugin {
 
           // 注意用函数式 replacer：字符串形式会把 CSS 里的 `$&` / `$'` / `$1` 当成
           // 替换模式解释，一条 `content: "$&"` 就能把整个文档塞进 <style>。
-          result = result.replace(tag, () => `<style>${css}</style>`)
+          result = result.replace(tag, () => `<style data-inline-main-css="">${css}</style>`)
           inlinedFileNames.add(fileName)
         }
 
-        // 删产物 + 清掉所有 chunk 的 importedCss 引用（见文件头 B1 说明）
-        for (const fileName of inlinedFileNames) {
-          delete bundle[fileName]
+        // 从所有 chunk 的 importedCss 里摘掉主 CSS（首页依赖内联 <style>，不重复发外链）；
+        // 开启逐路由 SSG 时保留 assets/index-*.css 资产文件供 /photos/* 等子页外链复用。
+        if (!keepAssetForSsg) {
+          for (const fileName of inlinedFileNames) {
+            delete bundle[fileName]
+          }
         }
         dropImportedCssReferences(bundle, inlinedFileNames)
 

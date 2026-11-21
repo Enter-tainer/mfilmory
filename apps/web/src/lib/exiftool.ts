@@ -1,11 +1,11 @@
-import { isExiftoolLoadedAtom } from '~/atoms/app'
-
-import { jotaiStore } from './jotai'
-
 // The wasm binary is re-exported by the package itself (`./zeroperl.wasm` in its
 // exports map). Importing it straight from the dependency avoids the committed
 // symlink this fork used to carry, which does not survive a Windows checkout.
 import zeroperlWasmUrl from '@6over3/zeroperl-ts/zeroperl.wasm?url'
+
+import { isExiftoolLoadedAtom } from '~/atoms/app'
+
+import { jotaiStore } from './jotai'
 
 const fetchZeroperlWasm = (..._args: unknown[]) => fetch(zeroperlWasmUrl)
 
@@ -26,7 +26,9 @@ class ExifToolManagerStatic {
   }
 
   constructor() {
-    this.load()
+    if (typeof window !== 'undefined') {
+      this.load()
+    }
   }
 
   async parse(buffer: Blob, filename?: string) {

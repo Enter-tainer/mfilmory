@@ -1,4 +1,4 @@
-import { RootPortal, RootPortalProvider } from '@afilmory/ui'
+import { RootPortalProvider } from '@afilmory/ui'
 import clsx from 'clsx'
 import { useAtomValue } from 'jotai'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -138,29 +138,27 @@ export const Component = () => {
   const isOpen = photoViewer.isOpen && !isClosing
 
   return (
-    <RootPortal>
-      <RootPortalProvider value={rootPortalValue}>
-        <RemoveScroll
-          style={
-            {
-              ...(accentColor ? { '--color-accent': accentColor } : {}),
-            } as React.CSSProperties
-          }
-          ref={setRef}
-          className={clsx(isOpen ? 'fixed inset-0 z-9999' : 'pointer-events-none fixed inset-0 z-40')}
-        >
-          <PhotoViewer
-            photos={photos}
-            currentIndex={photoViewer.currentIndex}
-            isOpen={isOpen}
-            triggerElement={photoViewer.triggerElement}
-            disableEntryTransition={disableEntryTransition}
-            onClose={handleClose}
-            onIndexChange={photoViewer.goToIndex}
-            onExitComplete={handleExitComplete}
-          />
-        </RemoveScroll>
-      </RootPortalProvider>
-    </RootPortal>
+    <RootPortalProvider value={rootPortalValue}>
+      <RemoveScroll
+        style={
+          {
+            ...(accentColor ? { '--color-accent': accentColor } : {}),
+          } as React.CSSProperties
+        }
+        ref={setRef}
+        className={clsx(isOpen ? 'fixed inset-0 z-9999' : 'pointer-events-none fixed inset-0 z-40')}
+      >
+        <PhotoViewer
+          photos={photos}
+          currentIndex={photoViewer.currentIndex}
+          isOpen={isOpen}
+          triggerElement={photoViewer.triggerElement}
+          disableEntryTransition={disableEntryTransition}
+          onClose={handleClose}
+          onIndexChange={photoViewer.goToIndex}
+          onExitComplete={handleExitComplete}
+        />
+      </RemoveScroll>
+    </RootPortalProvider>
   )
 }

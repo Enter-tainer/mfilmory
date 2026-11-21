@@ -3,14 +3,41 @@ import { useScrollViewElement } from '@afilmory/ui'
 import { clearRequestTimeout, requestTimeout } from '@essentials/request-timeout'
 import { useWindowSize } from '@react-hook/window-size'
 import { isEqual, throttle } from 'es-toolkit/compat'
-import type { ContainerPosition, MasonryProps, MasonryScrollerProps, Positioner } from 'masonic'
-import { createResizeObserver, useMasonry, usePositioner, useScrollToIndex } from 'masonic'
+import type { ContainerPosition, MasonryProps, MasonryScrollerProps, Positioner, UsePositionerOptions } from 'masonic'
+import { createPositioner, createResizeObserver, useMasonry, usePositioner, useScrollToIndex } from 'masonic'
 import { useForceUpdate } from 'motion/react'
 import * as React from 'react'
 
 export interface MasonryRef {
   reposition: () => void
 }
+
+const EMPTY_POSITIONER_OPTIONS: UsePositionerOptions = { width: 1, columnCount: 1 }
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function computeColumns(
+  width = 0,
+  minimumWidth = 200,
+  gutter = 0,
+  columnCount?: number,
+  maxColumnCount?: number,
+  maxColumnWidth?: number,
+): [number, number] {
+  const safeWidth = width > 0 ? width : 1
+  const count
+    = columnCount
+      || Math.min(
+        Math.floor((safeWidth + gutter) / (minimumWidth + gutter)),
+        maxColumnCount || Infinity,
+      )
+      || 1
+  let colW = Math.floor((safeWidth - gutter * (count - 1)) / count)
+  if (maxColumnWidth !== undefined && colW > maxColumnWidth) {
+    colW = maxColumnWidth
+  }
+  return [Math.max(1, colW), count]
+}
+
 /**
  * A "batteries included" masonry grid which includes all of the implementation details below. This component is the
  * easiest way to get off and running in your app, before switching to more advanced implementations, if necessary.
@@ -19,14 +46,22 @@ export interface MasonryRef {
  *
  * @param props
  */
-export const Masonry = <Item,>(props: MasonryProps<Item> & { ref?: React.Ref<MasonryRef> }) => {
+export const Masonry = <Item,>(
+  props: MasonryProps<Item> & {
+    ref?: React.Ref<MasonryRef>
+    initialWidth?: number
+    getItemHeight?: (item: Item, columnWidth: number) => number
+  },
+) => {
   const [scrollTop, setScrollTop] = React.useState(0)
   const [isScrolling, setIsScrolling] = React.useState(false)
   const scrollElement = useScrollViewElement()
 
   const fps = props.scrollFps || 12
   React.useEffect(() => {
-    if (!scrollElement) return
+    if (!scrollElement) {
+      return
+    }
 
     const scrollTimer: number | null = null
     const handleScroll = throttle(() => {
@@ -45,11 +80,15 @@ export const Masonry = <Item,>(props: MasonryProps<Item> & { ref?: React.Ref<Mas
   }, [fps, scrollElement])
   const didMount = React.useRef(0)
   React.useEffect(() => {
-    if (didMount.current === 1) setIsScrolling(true)
+    if (didMount.current === 1) {
+      setIsScrolling(true)
+    }
     let didUnsubscribe = false
     const to = requestTimeout(
       () => {
-        if (didUnsubscribe) return
+        if (didUnsubscribe) {
+          return
+        }
         // This is here to prevent premature bail outs while maintaining high resolution
         // unsets. Without it there will always bee a lot of unnecessary DOM writes to style.
         setIsScrolling(false)
@@ -73,7 +112,7 @@ export const Masonry = <Item,>(props: MasonryProps<Item> & { ref?: React.Ref<Mas
   const nextProps = Object.assign(
     {
       offset: containerPos.offset,
-      width: containerPos.width || windowSize[0],
+      width: containerPos.width || props.initialWidth || windowSize[0],
       height: containerPos.height || windowSize[1],
       containerRef,
     },
@@ -84,7 +123,7 @@ export const Masonry = <Item,>(props: MasonryProps<Item> & { ref?: React.Ref<Mas
 
   React.useImperativeHandle(props.ref, () => ({
     reposition: () => {
-      setPositionIndex((i) => i + 1)
+      setPositionIndex(i => i + 1)
     },
   }))
 
@@ -94,28 +133,75 @@ export const Masonry = <Item,>(props: MasonryProps<Item> & { ref?: React.Ref<Mas
   let shrunk = false
 
   if (props.items.length !== itemCounter.current) {
-    if (props.items.length < itemCounter.current) shrunk = true
+    if (props.items.length < itemCounter.current) {
+      shrunk = true
+    }
 
     itemCounter.current = props.items.length
   }
 
-  nextProps.positioner = usePositioner(nextProps, [shrunk ? Math.random() + positionIndex : positionIndex])
+  const fallbackPositioner = usePositioner(
+    props.getItemHeight ? EMPTY_POSITIONER_OPTIONS : nextProps,
+    [shrunk ? Math.random() + positionIndex : positionIndex],
+  )
+
+  const seededPositioner = React.useMemo(() => {
+    if (!props.getItemHeight) {
+      return null
+    }
+    const columnGutter = nextProps.columnGutter ?? 0
+    const rowGutter = nextProps.rowGutter ?? columnGutter
+    const [computedColumnWidth, computedColumnCount] = computeColumns(
+      nextProps.width,
+      nextProps.columnWidth ?? 200,
+      columnGutter,
+      nextProps.columnCount,
+      nextProps.maxColumnCount,
+      nextProps.maxColumnWidth,
+    )
+    const positioner = createPositioner(
+      computedColumnCount,
+      computedColumnWidth,
+      columnGutter,
+      rowGutter,
+    )
+    for (let i = 0; i < props.items.length; i += 1) {
+      positioner.set(i, Math.max(1, props.getItemHeight(props.items[i], computedColumnWidth)))
+    }
+    return positioner
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- positionIndex is an explicit trigger for ref.reposition()
+  }, [
+    props.getItemHeight,
+    props.items,
+    nextProps.width,
+    nextProps.columnWidth,
+    nextProps.columnGutter,
+    nextProps.rowGutter,
+    nextProps.columnCount,
+    nextProps.maxColumnCount,
+    nextProps.maxColumnWidth,
+    positionIndex,
+  ])
+
+  nextProps.positioner = seededPositioner ?? fallbackPositioner
 
   nextProps.resizeObserver = useResizeObserver(nextProps.positioner)
   nextProps.scrollTop = scrollTop
   nextProps.isScrolling = isScrolling
-  nextProps.height = window.innerHeight
+  nextProps.height = typeof window !== 'undefined' ? window.innerHeight : 900
 
   const scrollToIndex = useScrollToIndex(nextProps.positioner, {
     height: nextProps.height,
     offset: containerPos.offset,
     align: typeof props.scrollToIndex === 'object' ? props.scrollToIndex.align : void 0,
   })
-  const index =
-    props.scrollToIndex && (typeof props.scrollToIndex === 'number' ? props.scrollToIndex : props.scrollToIndex.index)
+  const index
+    = props.scrollToIndex && (typeof props.scrollToIndex === 'number' ? props.scrollToIndex : props.scrollToIndex.index)
 
   React.useEffect(() => {
-    if (index !== void 0) scrollToIndex(index)
+    if (index !== void 0) {
+      scrollToIndex(index)
+    }
   }, [index, scrollToIndex])
 
   return <MasonryScroller {...nextProps} />
@@ -204,7 +290,9 @@ function useContainerPosition(
           ...prev,
           width: elementRef.current?.offsetWidth || 0,
         }
-        if (isEqual(next, prev)) return prev
+        if (isEqual(next, prev)) {
+          return prev
+        }
         return next
       })
     })

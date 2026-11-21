@@ -31,7 +31,19 @@ export function LanguageSwitcher() {
       <DropdownMenuContent align="end" className="min-w-[180px]">
         <div className="px-2 py-1.5 text-xs font-medium text-white/50">{t('action.language')}</div>
         {currentSupportedLanguages.map(lng => (
-          <DropdownMenuItem key={lng} onClick={() => void i18n.changeLanguage(lng)} className="justify-between">
+          <DropdownMenuItem
+            key={lng}
+            onClick={() => {
+              try {
+                window.localStorage.setItem('i18nextLng', lng)
+              }
+              catch {
+                // ignore storage errors
+              }
+              void i18n.changeLanguage(lng)
+            }}
+            className="justify-between"
+          >
             <span>{languageLabels[lng] ?? lng}</span>
             {current === lng && <i className="i-mingcute-check-line text-base" />}
           </DropdownMenuItem>

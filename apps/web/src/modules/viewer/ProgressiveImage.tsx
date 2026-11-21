@@ -89,7 +89,7 @@ export const ProgressiveImage = ({
 
   const resolvedSrc = useMemo(() => {
     if (src.startsWith('/')) {
-      return new URL(src, window.location.origin).toString()
+      return typeof window !== 'undefined' ? new URL(src, window.location.origin).toString() : src
     }
     return src
   }, [src])
