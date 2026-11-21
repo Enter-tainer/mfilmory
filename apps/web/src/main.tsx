@@ -100,6 +100,8 @@ async function bootstrap() {
 
   const router = createAppRouter(appRoutes)
 
+  document.querySelector('#ssg-fallback-hide')?.remove()
+
   if (canHydrate) {
     hydrateRoot(rootEl, <RouterProvider router={router} />, {
       onRecoverableError(error) {

@@ -3,14 +3,40 @@ import { useScrollViewElement } from '@afilmory/ui'
 import { clearRequestTimeout, requestTimeout } from '@essentials/request-timeout'
 import { useWindowSize } from '@react-hook/window-size'
 import { isEqual, throttle } from 'es-toolkit/compat'
-import type { ContainerPosition, MasonryProps, MasonryScrollerProps, Positioner } from 'masonic'
-import { createResizeObserver, useMasonry, usePositioner, useScrollToIndex } from 'masonic'
+import type { ContainerPosition, MasonryProps, MasonryScrollerProps, Positioner, UsePositionerOptions } from 'masonic'
+import { createPositioner, createResizeObserver, useMasonry, usePositioner, useScrollToIndex } from 'masonic'
 import { useForceUpdate } from 'motion/react'
 import * as React from 'react'
 
 export interface MasonryRef {
   reposition: () => void
 }
+
+const EMPTY_POSITIONER_OPTIONS: UsePositionerOptions = { width: 1, columnCount: 1 }
+
+function computeColumns(
+  width = 0,
+  minimumWidth = 200,
+  gutter = 0,
+  columnCount?: number,
+  maxColumnCount?: number,
+  maxColumnWidth?: number,
+): [number, number] {
+  const safeWidth = width > 0 ? width : 1
+  const count
+    = columnCount
+      || Math.min(
+        Math.floor((safeWidth + gutter) / (minimumWidth + gutter)),
+        maxColumnCount || Infinity,
+      )
+      || 1
+  let colW = Math.floor((safeWidth - gutter * (count - 1)) / count)
+  if (maxColumnWidth !== undefined && colW > maxColumnWidth) {
+    colW = maxColumnWidth
+  }
+  return [Math.max(1, colW), count]
+}
+
 /**
  * A "batteries included" masonry grid which includes all of the implementation details below. This component is the
  * easiest way to get off and running in your app, before switching to more advanced implementations, if necessary.
@@ -19,7 +45,13 @@ export interface MasonryRef {
  *
  * @param props
  */
-export const Masonry = <Item,>(props: MasonryProps<Item> & { ref?: React.Ref<MasonryRef> }) => {
+export const Masonry = <Item,>(
+  props: MasonryProps<Item> & {
+    ref?: React.Ref<MasonryRef>
+    initialWidth?: number
+    getItemHeight?: (item: Item, columnWidth: number) => number
+  },
+) => {
   const [scrollTop, setScrollTop] = React.useState(0)
   const [isScrolling, setIsScrolling] = React.useState(false)
   const scrollElement = useScrollViewElement()
@@ -79,7 +111,7 @@ export const Masonry = <Item,>(props: MasonryProps<Item> & { ref?: React.Ref<Mas
   const nextProps = Object.assign(
     {
       offset: containerPos.offset,
-      width: containerPos.width || windowSize[0],
+      width: containerPos.width || props.initialWidth || windowSize[0],
       height: containerPos.height || windowSize[1],
       containerRef,
     },
@@ -107,7 +139,50 @@ export const Masonry = <Item,>(props: MasonryProps<Item> & { ref?: React.Ref<Mas
     itemCounter.current = props.items.length
   }
 
-  nextProps.positioner = usePositioner(nextProps, [shrunk ? Math.random() + positionIndex : positionIndex])
+  const fallbackPositioner = usePositioner(
+    props.getItemHeight ? EMPTY_POSITIONER_OPTIONS : nextProps,
+    [shrunk ? Math.random() + positionIndex : positionIndex],
+  )
+
+  const seededPositioner = React.useMemo(() => {
+    if (!props.getItemHeight) {
+      return null
+    }
+    const columnGutter = nextProps.columnGutter ?? 0
+    const rowGutter = nextProps.rowGutter ?? columnGutter
+    const [computedColumnWidth, computedColumnCount] = computeColumns(
+      nextProps.width,
+      nextProps.columnWidth ?? 200,
+      columnGutter,
+      nextProps.columnCount,
+      nextProps.maxColumnCount,
+      nextProps.maxColumnWidth,
+    )
+    const positioner = createPositioner(
+      computedColumnCount,
+      computedColumnWidth,
+      columnGutter,
+      rowGutter,
+    )
+    for (let i = 0; i < props.items.length; i += 1) {
+      positioner.set(i, Math.max(1, props.getItemHeight(props.items[i], computedColumnWidth)))
+    }
+    return positioner
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- positionIndex is an explicit trigger for ref.reposition()
+  }, [
+    props.getItemHeight,
+    props.items,
+    nextProps.width,
+    nextProps.columnWidth,
+    nextProps.columnGutter,
+    nextProps.rowGutter,
+    nextProps.columnCount,
+    nextProps.maxColumnCount,
+    nextProps.maxColumnWidth,
+    positionIndex,
+  ])
+
+  nextProps.positioner = seededPositioner ?? fallbackPositioner
 
   nextProps.resizeObserver = useResizeObserver(nextProps.positioner)
   nextProps.scrollTop = scrollTop

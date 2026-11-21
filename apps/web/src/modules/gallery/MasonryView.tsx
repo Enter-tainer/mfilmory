@@ -93,10 +93,36 @@ export const MasonryView = ({ photos, onRender }: MasonryViewProps) => {
     [],
   )
   const getItemKey = useCallback((data: PhotoManifest) => data.id, [])
+  const getItemHeight = useCallback((photo: PhotoManifest, colW: number) => {
+    const ar = photo.aspectRatio > 0 ? photo.aspectRatio : 1
+    return Math.max(1, Math.round(colW / ar))
+  }, [])
+  const maxColumnCount = columns === 'auto' && !isMobile ? COLUMN_WIDTH_CONFIG.auto.maxColumns : undefined
+  const itemHeightEstimate = useMemo(() => {
+    if (photos.length === 0) {
+      return 300
+    }
+    const availableWidth = Math.max(containerWidth - (isMobile ? 8 : 0), columnWidth)
+    const cols
+      = Math.min(
+        Math.floor((availableWidth + MASONRY_GUTTER) / (columnWidth + MASONRY_GUTTER)),
+        maxColumnCount ?? Infinity,
+      ) || 1
+    const actualColW = Math.floor((availableWidth - MASONRY_GUTTER * (cols - 1)) / cols)
+    let invArSum = 0
+    for (const photo of photos) {
+      const ar = photo.aspectRatio > 0 ? photo.aspectRatio : 1
+      invArSum += 1 / ar
+    }
+    return Math.round((invArSum / photos.length) * actualColW + MASONRY_GUTTER)
+  }, [photos, containerWidth, isMobile, columnWidth, maxColumnCount])
 
   if (!isClient) {
     return <SsrPhotoGrid photos={photos.slice(0, SSR_GRID_PHOTO_COUNT)} />
   }
+
+  const initialMasonryWidth
+    = (document.body.clientWidth || document.documentElement.clientWidth || containerWidth) - (isMobile ? 8 : 0)
 
   return (
     <Masonry<PhotoManifest>
@@ -104,11 +130,13 @@ export const MasonryView = ({ photos, onRender }: MasonryViewProps) => {
       items={photos}
       render={renderMasonryItem}
       onRender={onRender}
+      initialWidth={initialMasonryWidth}
+      getItemHeight={getItemHeight}
       columnWidth={columnWidth}
-      maxColumnCount={columns === 'auto' && !isMobile ? COLUMN_WIDTH_CONFIG.auto.maxColumns : undefined}
+      maxColumnCount={maxColumnCount}
       columnGutter={MASONRY_GUTTER}
       rowGutter={MASONRY_GUTTER}
-      itemHeightEstimate={400}
+      itemHeightEstimate={itemHeightEstimate}
       // masonic 的渲染带是 `[scrollTop − 0.5·h·k, scrollTop + h·k]`（`use-masonry.js:99,104`，
       // 源码注释：只向**上**过扫一半的量），k = overscanBy，h = 视口高度。注意是「下多上少」：
       //   k=2（默认）→ 上方 1h、下方 1h
@@ -130,9 +158,11 @@ export const MasonryView = ({ photos, onRender }: MasonryViewProps) => {
       // 里减掉（`useScroller` 被注释掉了），所以真实缓冲比上面的公式多约 50px（PageHeader
       // 是 fixed、不占流）。结论方向不变，只是实际更宽松一点。
       //
-      // 真正该修的是下面这个 `itemHeightEstimate={400}`：真实 item 高度在 1440 下均值
-      // 约 219px、中位数 185px（偏差 +83%），移动端偏差更大，导致文档高度虚高约 72%、
-      // 滚到底时高度收缩而「跳」。那是既有问题，留给后续 PR。
+      // 高度与首帧切换：
+      //   1) `itemHeightEstimate` 由 `mean(1/aspectRatio) * actualColW + gutter` 数据驱动计算
+      //      （1440px 下约 228px，不再用 400px 硬编码导致 28,652px 虚高）；
+      //   2) `Masonic.tsx` 传入 `getItemHeight` 在创建 positioner 时一次性预置全部 item 高度，
+      //      首次 commit 即进入 phase-two（零 `visibility:hidden` 首帧空窗、真实容器总高 ~17,037px）。
       overscanBy={1.5}
       itemKey={getItemKey}
     />
@@ -223,7 +253,9 @@ function buildSsrMasonryCss(photos: PhotoManifest[]): string {
     const gutterTotal = (cols - 1) * MASONRY_GUTTER
     const cwFallback = `calc((100cqw - ${gutterTotal}px)/${cols})`
     const cwFloored = `round(down,(100cqw - ${gutterTotal}px)/${cols},1px)`
-    let block = `.ssr-m{--cw:${cwFallback};--cw:${cwFloored};--ms:${placement.maxS.toFixed(4)};--mr:${placement.maxR}}`
+    let block
+      = `.ssr-m{--cw:${cwFallback};--ms:${placement.maxS.toFixed(4)};--mr:${placement.maxR}}`
+        + `@supports (width:round(down,1px,1px)){.ssr-m{--cw:${cwFloored}}}`
     for (let i = 0; i < placement.items.length; i += 1) {
       const it = placement.items[i]
       block += `.ssr-m>a:nth-of-type(${i + 1}){--c:${it.col};--s:${it.s.toFixed(4)};--r:${it.r}}`

@@ -367,8 +367,10 @@ hover/focus 某张照片时才 `import()` viewer 路由（190 KB br），`window
    - 新增 `apps/web/src/entry-server.tsx` 与 `apps/web/plugins/vite/ssg-prerender.ts`。`entry-server.tsx` 直接复用 `createAppRoutes()`（源自 `generated-routes.ts` 单一真源）并在 `initSsrContext` 时一次性解析全部 `route.lazy()`；构建末尾校验 `getDiscoveredRoutePaths()` 的每条路由要么完成预渲染，要么显式登记在 `SKIPPED_PRERENDER_ROUTES`（`/map` 因纯 WebGL、`/manifest` 因 580 KB 调试表保留走 SPA 回退，不在静态站点里发出假骨架或大表；`pages/map/index.tsx` 保持 `main` 原样），漏配任何新页面都会在构建期直接报错。
    - `closeBundle` 以 `AFILMORY_SSR_BUILD=1` 打包 `entry-server.mjs`，构建期渲染 **370 条路由**（`/` 与 369 份 `/photos/<id>.html`，`photos/*.html` 原始总计 `9.09 MB`），仅替换配平的 `<div id="root">...</div>`（保留 `<body>` 内任何其他标签与脚本），并剥离 React 19 `renderToString` 吐在 `#root` 顶部的重复 `<link rel="preload" as="image">`。
    - `inline-main-css.ts` 为内联 `<style>` 添加显式 `data-inline-main-css` 标记，首页 `index.html` 保留主 CSS 内联（`215,060 B` 与参照产物逐字节一致），同时保留 `assets/index-*.css` 供 369 份 `/photos/*.html` 外链复用（1 年 immutable）；`ssg-prerender.ts` 通过精确匹配 `data-inline-main-css` 替换外链（缺失即报错），并通过 `generateBundle` 的 `facadeModuleId` 注入对应 chunk 的 `modulepreload` 与 preview 图 `preload`。
-2. **SSR 瀑布流与 `masonic` 像素对齐 + 无 JS 导航**：
-   - `MasonryView.tsx`：桌面端补充传递 `maxColumnCount` 对齐 8 列上限；`!isClient` 时渲染精确复刻 `masonic` `getColumns` 断点 + 最短列贪心算法的 CSS 瀑布流（`container-type: inline-size` + `100cqw` + `round(down, ...)`，覆盖 1–8 列断点，`1,584 B br11`），水合切换到 `<Masonry>` 后列归属与卡片坐标几乎零跳动。
+   - **SPA 回退路由防闪**：`ssg-prerender.ts` 仅向首页 `dist/index.html` 的 `</head>` 前注入极小同步守卫脚本，在非首页（`/map`、`/manifest`、404）或带 query string（`/?...`）时立即通过 `<style id="ssg-fallback-hide">#root{display:none}</style>` 阻断 36 张首页照片与假滚动条的首绘闪现（背景维持深色 `rgb(28, 28, 30)`）；`main.tsx` 在 `createRoot` / `hydrateRoot` 接管前移除该样式。
+2. **SSR 瀑布流与 `masonic` 像素对齐、零帧切手与无 JS 导航**：
+   - `MasonryView.tsx`：桌面端补充传递 `maxColumnCount` 对齐 8 列上限；`!isClient` 时渲染精确复刻 `masonic` `getColumns` 断点 + 最短列贪心算法的 CSS 瀑布流（`container-type: inline-size` + `100cqw` + `round(down, ...)`，覆盖 1–8 列断点），并将 `round(down, ...)` 收进 `@supports (width:round(down,1px,1px))`，使 Chrome &lt;125 / Firefox &lt;118 正常使用 `calc(...)` 回退而不坍缩为 `unset`。
+   - **消除切换闪烁与虚高滚动条**：`Masonic.tsx` 新增 `getItemHeight` 与 `initialWidth` 支持（`MasonryView.tsx` 按 `Math.round(colW / aspectRatio)` 与 `document.body.clientWidth` 预置 `createPositioner`），使 `<Masonry>` 首次 commit 即处于 phase-two（零 `visibility:hidden` 首帧空窗）；同时将 `itemHeightEstimate` 改为数据驱动的 `mean(1/aspectRatio) * actualColW + gutter`（1440px 下不再因 `400px` 硬编码产生 `28,652 px` 虚高），实测 `1440×900` 首帧与滚动到底部总高均稳定在 `17,037 px`（跳变 `0 px`）。
    - `PhotoViewer.tsx`：零 JS / 未水合时左上角提供 `<noscript>` 回画廊链接，右上角关闭按钮以 `<a href="/">` 替代禁用无响应的 `<button>`，水合后无缝切回 `ActionButton`。
 3. **无缝 `hydrateRoot` 与全路由零不匹配**：
    - `apps/web/src/main.tsx`：`bootstrap()` 校对 `#root[data-ssg-route]` 路由一致后并行准备 manifest、i18n 与匹配的懒路由模块（`matchRoutes` + `route.lazy()`），调用 `hydrateRoot`（query filter 首页或 404 回退 `createRoot`）。
@@ -382,12 +384,12 @@ hover/focus 某张照片时才 `import()` viewer 路由（190 KB br），`window
 
 | 维度 | `main` (`br11`) | `react-ssg` (`br11`) | 变化 |
 | --- | ---: | ---: | ---: |
-| 首页 `index.html`（含内联 CSS + 36 图精确 `masonic` SSR HTML/CSS） | 26,537 B | 29,154 B | +2,617 B |
-| 入口 + modulepreload JS（含 SSR/hydration 与 CSS 瀑布流逻辑） | 195,526 B | 197,047 B | +1,521 B |
+| 首页 `index.html`（含内联 CSS + 36 图精确 `masonic` SSR HTML/CSS + 回退守卫） | 26,537 B | 29,297 B | +2,760 B |
+| 入口 + modulepreload JS（含 SSR/hydration、`getItemHeight` 预置与 CSS 瀑布流逻辑） | 195,526 B | 197,338 B | +1,812 B |
 | `photos-manifest.*.json` | 48,765 B | 48,765 B | 0 B |
-| **首页关键路径总计（TOTAL）** | **270,828 B** | **274,966 B** | **+4,138 B（+1.53%）** |
+| **首页关键路径总计（TOTAL）** | **270,828 B** | **275,400 B** | **+4,572 B（+1.69%）** |
 
-各静态页面 HTML 实测体积：`index.html` `252,867 B raw / 29,154 B br11`、`photos/20261104-LKXG5370.html` `24,893 B raw / 7,612 B br11`（`dist/map.html` 与 `dist/manifest.html` 已不再生成）。
+各静态页面 HTML 实测体积：`index.html` `253,533 B raw / 29,297 B br11`、`photos/20261104-LKXG5370.html` `24,893 B raw / 7,616 B br11`（`dist/map.html` 与 `dist/manifest.html` 已不再生成）。
 
 ## 实测 Web Vitals A/B（本地 `spa-server.mjs`，`1440×900`，各 3 次独立冷会话中位数）
 
@@ -396,14 +398,19 @@ hover/focus 某张照片时才 `import()` viewer 路由（190 KB br），`window
 | `/`（非节流） | 428 ms / 1,188 ms / 0 / 38 ms | 328 ms / 364 ms / 0 / 55 ms | LCP **−69.4%**, FCP **−23.4%**, CLS=0 |
 | `/photos/20261104-LKXG5370`（非节流） | 516 ms / 1,116 ms / 0.0001 / 81 ms | 136 ms / 856 ms / 0.0001 / 87 ms | FCP **−73.6%**, LCP **−23.3%**, CLS=0.0001 |
 
-> 注：上表 Web Vitals 采样于最终微调前的 commit `576b4bf8`；最终代码在完成 `generated-routes` 单一真源、停预渲染 `/map`/`/manifest` 及 `masonic` 精确 CSS 瀑布流重构后重测了几何一致度与零 JS/水合回归（见下），未重复重采该非节流 Web Vitals 耗时。
+> 注：上表 Web Vitals 采样于早期 commit `576b4bf8`；最终代码在完成 `generated-routes` 单一真源、停预渲染 `/map`/`/manifest`、`masonic` 精确 CSS 瀑布流、预置 `positioner` + `@supports` 回退及 SPA 回退 `<head>` 守卫后重测了几何一致度、首帧零 `hidden` 切手、旧版 CSS 回退与零 JS/水合回归（见下），未重复重采该非节流 Web Vitals 耗时。
 
 ## 验证摘要
 
-- **最终构建与静态校验**：`@afilmory/web` `vite build`（370 条路由预渲染 + 路由全覆盖断言 + meta 替换数断言 + 配平 `#root` 检查）、全仓 `pnpm type-check`、改动文件定向 `eslint`（0 error）、`pnpm og:middleware -- --check`、`check-block-comments.mjs`（388 文件）、`assert-manifest-fields.mjs`（369 照片一致性）与 `INLINE_MAIN_CSS=0` 参照差分 `check-inline-css.mjs`（`215,060 B` 主 CSS 逐字节一致）均通过；确认 `dist/map.html` / `dist/manifest.html` 不存在、`<style>.ssr-m>a` 未被转义、`<noscript><a href="/">` 与关闭 `<a>` 存在。
-- **SSR vs `masonic` 几何一致度（最终构建 Chromium 实测）**：对比零 JS SSR（`.ssr-m > a`）与水合后 `<Masonry>` 同照片 `getBoundingClientRect()`：
+- **最终构建与静态校验**：`@afilmory/web` `vite build`（370 条路由预渲染 + 路由全覆盖断言 + meta 替换数断言 + 配平 `#root` 检查）、全仓 `pnpm type-check`、改动文件定向 `eslint`（0 error）、`pnpm og:middleware -- --check`、`check-block-comments.mjs`（388 文件）、`assert-manifest-fields.mjs`（369 照片一致性）与 `INLINE_MAIN_CSS=0` 参照差分 `check-inline-css.mjs`（`215,060 B` 主 CSS 逐字节一致）均通过；确认 `dist/map.html` / `dist/manifest.html` 不存在、`.ssr-m` 使用 `@supports (width:round(down,1px,1px))`、`<head>` 仅在首页注入 `#ssg-fallback-hide` 守卫、`photos/*.html` 不含该脚本。
+- **首帧 `masonic` 切手与容器高度稳定性（Chromium `MutationObserver` + 滚到底部实测）**：
+  - `1440×900`：首次 commit `33` 个 `[role="gridcell"]` 中 `hiddenCount = 0`；初始与滚到底部容器高度均为 `17,037 px`（跳变 `0 px`）。
+  - `1920×1080`：`59` 个 cell，`hiddenCount = 0`，容器高度 `11,573 px`。
+  - `390×844`：`19` 个 cell，`hiddenCount = 0`，容器高度 `28,300 px`。
+- **SSR vs `masonic` 几何一致度与 `--cw` 回退（最终构建 Chromium 实测）**：
   - `390×844`：2/2 列，19 张可视重叠卡片，**0 列错配**，`maxDx=0.00px`，`maxDy=0.61px`，`maxDw=0.00px`，`maxDh=0.00px`
   - `1280×800`：5/5 列，33 张重叠卡片，**0 列错配**，`maxDx=0.00px`，`maxDy=0.50px`，`maxDw=0.00px`，`maxDh=0.00px`
   - `1440×900`：5/5 列，33 张重叠卡片，**0 列错配**，`maxDx=0.00px`，`maxDy=1.47px`，`maxDw=0.00px`，`maxDh=0.00px`
-- **Zero-JS 实测**：`/`、`photos/20261104-LKXG5370`（桌面与移动端 `390×844`）均存在 `<noscript>` 与 `<a href="/">` 关闭按钮、预览图正常加载，点击 `<a href="/">` 可直接回到 `/` 渲染 36 张画廊网格。
-- **零水合报错实测（9/9 通过）**：`/`、ASCII/CJK `/photos/<id>`、SPA 回退的 `/map` 与 `/manifest`、`/?cameras=SONY%20ILCE-7RM5`、移动端 `390×844` `/` 与 `/photos/<id>`、以及 `localStorage.i18nextLng='en'` 首页水合后自动切换英文页头，全部 **0 `[hydration]` / React #418/#423/#425 / 控制台 error**。
+  - 移除 `@supports (width:round(down,1px,1px))` 后在 `1440×900` 实测：`calc(...)` 回退正确铺出 5 列（`colCount=5`，`minWidth=284.8px`）。
+- **SPA 回退防闪与 Zero-JS 实测**：拦截主 JS 后访问 `/map`、`/manifest`、`/?cameras=SONY%20ILCE-7RM5` 与 `/nonexistent-404` 均命中 `#ssg-fallback-hide`（`#root` `display:none`，`body.scrollHeight === 900` 无假滚动条，背景为 `rgb(28, 28, 30)`），`/` 自身保持 `36` 张卡片直接可见；`/` 与 `/photos/20261104-LKXG5370` 在 Zero-JS 下均可用 `<noscript>` / 关闭 `<a href="/">` 返回画廊。
+- **零水合报错实测（10/10 通过）**：`/`、ASCII/CJK `/photos/<id>`、SPA 回退 `/map`、`/manifest`、`/?cameras=SONY%20ILCE-7RM5` 与 `/nonexistent-404`（均移除 `#ssg-fallback-hide` 且 `display:block`）、移动端 `390×844` `/` 与 `/photos/<id>`、以及 `localStorage.i18nextLng='en'` 首页水合，全部 **0 `[hydration]` / React #418/#423/#425 / 控制台 error**。

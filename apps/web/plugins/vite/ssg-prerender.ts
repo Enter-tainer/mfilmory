@@ -189,10 +189,17 @@ function injectHeadTags(html: string, tags: string): string {
   }
   const headCloseIdx = html.indexOf('</head>')
   if (headCloseIdx === -1) {
-    return html
+    throw new Error('[ssg-prerender] missing </head> in HTML')
   }
   return `${html.slice(0, headCloseIdx)}${tags}${html.slice(headCloseIdx)}`
 }
+
+// 首页 HTML 也会作为 Pages SPA 回退发给 /map、/manifest、带查询参数的筛选链接与 404；
+// 在 <head> 末尾同步判定路径是否命中首页（与 main.tsx 的 canHydrate 完全一致），
+// 不命中时立刻注入 #root{display:none}，首绘前隐藏 36 张首页占位图并避免触发懒加载与假滚动条，
+// 待 main.tsx 接管渲染前移除该 <style>。
+const HOME_FALLBACK_GUARD_SCRIPT
+  = `<script>(function(){var p=location.pathname;try{p=decodeURIComponent(p)}catch(_){}if(p.length>1)p=p.replace(/\\/+$/,'');if(p!=='/'||location.search.length>0){var s=document.createElement('style');s.id='ssg-fallback-hide';s.textContent='#root{display:none}';document.head.appendChild(s)}})()</script>`
 
 export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
   let rootDir = ''
@@ -315,8 +322,11 @@ export function ssgPrerenderPlugin(siteConfig: SiteConfig): Plugin {
           base,
         )
 
-        // 1) 首页 `/` -> index.html（保留内联主 CSS + 4 张首屏图 preload）
-        const homeHtml = injectRootHtml(baseIndexHtml, '/', await serverMod.renderRoute('/'))
+        // 1) 首页 `/` -> index.html（保留内联主 CSS + 4 张首屏图 preload + SPA 回退首绘保护脚本）
+        const homeHtml = injectHeadTags(
+          injectRootHtml(baseIndexHtml, '/', await serverMod.renderRoute('/')),
+          HOME_FALLBACK_GUARD_SCRIPT,
+        )
         writeFileSync(indexHtmlPath, homeHtml, 'utf8')
 
         // 2) 所有单张照片 `/photos/<id>` -> dist/photos/<id>.html
