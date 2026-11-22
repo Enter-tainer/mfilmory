@@ -20,9 +20,9 @@ const HELD_SCALE = 1.25
 const PULLED_SCALE = 0.72
 const FIRST_RING = 6
 const RING_GROWTH = 5
-const HUE_TOLERANCE = 28
-const LIGHTNESS_TOLERANCE = 0.3
-const NEUTRAL_LIGHTNESS_TOLERANCE = 0.15
+const HUE_TOLERANCE = 15
+const LIGHTNESS_TOLERANCE = 0.15
+const NEUTRAL_LIGHTNESS_TOLERANCE = 0.08
 
 const monthOf = (photo: CanvasPhoto) => photo.dateTaken.slice(0, 7)
 

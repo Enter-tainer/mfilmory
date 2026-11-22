@@ -45,9 +45,9 @@ it('photos are related by tag when they share one', () => {
 })
 
 it('photos are related by colour when their hues are close', () => {
-  const red = { h: 5, s: 0.7, l: 0.5 }
-  assert.equal(isRelated('color', photo('a'), photo('b'), red, { h: 350, s: 0.6, l: 0.45 }), true)
-  assert.equal(isRelated('color', photo('a'), photo('b'), red, { h: 120, s: 0.6, l: 0.45 }), false)
+  const red = { h: 5, c: 0.7, l: 0.5 }
+  assert.equal(isRelated('color', photo('a'), photo('b'), red, { h: 352, c: 0.6, l: 0.45 }), true)
+  assert.equal(isRelated('color', photo('a'), photo('b'), red, { h: 120, c: 0.6, l: 0.45 }), false)
   assert.equal(isRelated('color', photo('a'), photo('b'), red, null), false)
 })
 

@@ -2,23 +2,30 @@ import { thumbHashToRGBA } from 'thumbhash'
 
 export interface PhotoColor {
   h: number
-  s: number
+  c: number
   l: number
 }
 
-export const NEUTRAL_SATURATION = 0.05
+export const NEUTRAL_CHROMA = 0.02
 
-export const rgbToHsl = (r: number, g: number, b: number): PhotoColor => {
-  const max = Math.max(r, g, b)
-  const min = Math.min(r, g, b)
-  const l = (max + min) / 2
-  const delta = max - min
-  if (delta === 0) {
-    return { h: 0, s: 0, l }
+const srgbToLinear = (channel: number) =>
+  channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+
+export const rgbToOklch = (r: number, g: number, b: number): PhotoColor => {
+  const lr = srgbToLinear(r)
+  const lg = srgbToLinear(g)
+  const lb = srgbToLinear(b)
+  const lms = Math.cbrt(0.412_221_47 * lr + 0.536_332_536 * lg + 0.051_445_993 * lb)
+  const mms = Math.cbrt(0.211_903_5 * lr + 0.680_699_545 * lg + 0.107_396_957 * lb)
+  const sms = Math.cbrt(0.088_302_462 * lr + 0.281_718_838 * lg + 0.629_978_7 * lb)
+  const lightness = 0.210_454_255 * lms + 0.793_617_785 * mms - 0.004_072_047 * sms
+  const a = 1.977_998_495 * lms - 2.428_592_205 * mms + 0.450_593_71 * sms
+  const bb = 0.025_904_037 * lms + 0.782_771_766 * mms - 0.808_675_766 * sms
+  return {
+    h: ((Math.atan2(bb, a) * 180) / Math.PI + 360) % 360,
+    c: Math.hypot(a, bb),
+    l: lightness,
   }
-  const s = delta / (1 - Math.abs(2 * l - 1))
-  const sector = max === r ? ((g - b) / delta) % 6 : max === g ? (b - r) / delta + 2 : (r - g) / delta + 4
-  return { h: (sector * 60 + 360) % 360, s: Math.min(1, s), l }
 }
 
 export const colorOfThumbHash = (hash: Uint8Array | null): PhotoColor | null => {
@@ -32,16 +39,15 @@ export const colorOfThumbHash = (hash: Uint8Array | null): PhotoColor | null => 
     let y = 0
     let lightness = 0
     for (let offset = 0; offset < rgba.length; offset += 4) {
-      const pixel = rgbToHsl(rgba[offset] / 255, rgba[offset + 1] / 255, rgba[offset + 2] / 255)
-      const chroma = pixel.s * (1 - Math.abs(2 * pixel.l - 1))
+      const pixel = rgbToOklch(rgba[offset] / 255, rgba[offset + 1] / 255, rgba[offset + 2] / 255)
       const angle = (pixel.h * Math.PI) / 180
-      x += Math.cos(angle) * chroma
-      y += Math.sin(angle) * chroma
+      x += Math.cos(angle) * pixel.c
+      y += Math.sin(angle) * pixel.c
       lightness += pixel.l
     }
     return {
       h: ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360,
-      s: Math.hypot(x, y) / pixels,
+      c: Math.hypot(x, y) / pixels,
       l: lightness / pixels,
     }
   }
@@ -55,7 +61,7 @@ export const hueDistance = (a: number, b: number) => {
   return Math.min(distance, 360 - distance)
 }
 
-export const isNeutral = (color: PhotoColor | null) => !color || color.s < NEUTRAL_SATURATION
+export const isNeutral = (color: PhotoColor | null) => !color || color.c < NEUTRAL_CHROMA
 
 export const createColorCache = () => {
   const cache = new Map<string, PhotoColor | null>()

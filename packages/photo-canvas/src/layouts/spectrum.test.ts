@@ -24,7 +24,7 @@ const build = (colors: (PhotoColor | null)[]) => {
 }
 
 it('places every photo exactly once without overlap', () => {
-  const colors = Array.from({ length: 200 }).map((_, i) => ({ h: (i * 37) % 360, s: 0.6, l: 0.2 + (i % 7) / 10 }))
+  const colors = Array.from({ length: 200 }).map((_, i) => ({ h: (i * 37) % 360, c: 0.6, l: 0.2 + (i % 7) / 10 }))
   const layout = build(colors)
   assert.equal(layout.instances.length, 200)
   assert.equal(new Set(layout.instances.map(i => i.photoIndex)).size, 200)
@@ -40,7 +40,7 @@ it('places every photo exactly once without overlap', () => {
 })
 
 it('hue never decreases from left to right', () => {
-  const colors = Array.from({ length: 120 }).map((_, i) => ({ h: (i * 53) % 360, s: 0.7, l: 0.5 }))
+  const colors = Array.from({ length: 120 }).map((_, i) => ({ h: (i * 53) % 360, c: 0.7, l: 0.5 }))
   const layout = build(colors)
   const sorted = [...layout.instances].sort((a, b) => a.x - b.x)
   for (let i = 1; i < sorted.length; i++) {
@@ -52,10 +52,10 @@ it('hue never decreases from left to right', () => {
 
 it('grey and colourless photos sit to the right of every coloured one', () => {
   const colors: (PhotoColor | null)[] = [
-    { h: 10, s: 0.8, l: 0.5 },
-    { h: 200, s: 0.02, l: 0.5 },
+    { h: 10, c: 0.8, l: 0.5 },
+    { h: 200, c: 0.005, l: 0.5 },
     null,
-    { h: 300, s: 0.7, l: 0.4 },
+    { h: 300, c: 0.7, l: 0.4 },
   ]
   const layout = build(colors)
   const x = (photoIndex: number) => layout.instances.find(i => i.photoIndex === photoIndex)!.x
@@ -64,7 +64,7 @@ it('grey and colourless photos sit to the right of every coloured one', () => {
 })
 
 it('within a column lighter photos are above darker ones', () => {
-  const colors = Array.from({ length: 40 }).map((_, i) => ({ h: 100, s: 0.8, l: ((i * 7) % 40) / 50 + 0.1 }))
+  const colors = Array.from({ length: 40 }).map((_, i) => ({ h: 100, c: 0.8, l: ((i * 7) % 40) / 50 + 0.1 }))
   const layout = build(colors)
   const columns = new Map<number, typeof layout.instances>()
   for (const instance of layout.instances) {
@@ -81,8 +81,8 @@ it('within a column lighter photos are above darker ones', () => {
 
 it('has no islands and bounds that contain every photo', () => {
   const layout = build([
-    { h: 10, s: 0.8, l: 0.5 },
-    { h: 190, s: 0.8, l: 0.5 },
+    { h: 10, c: 0.8, l: 0.5 },
+    { h: 190, c: 0.8, l: 0.5 },
   ])
   assert.deepEqual(layout.islands, [])
   for (const i of layout.instances) {
