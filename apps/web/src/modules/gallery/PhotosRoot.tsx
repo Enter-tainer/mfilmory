@@ -1,22 +1,24 @@
 import { useScrollViewElement } from '@afilmory/ui'
 import clsx from 'clsx'
-import { useAtomValue } from 'jotai'
 import { lazy, Suspense, useEffect, useState } from 'react'
 
-import { gallerySettingAtom } from '~/atoms/app'
 import { useHasActiveFilters } from '~/hooks/useHasActiveFilters'
 import { useContextPhotos } from '~/hooks/usePhotoViewer'
 import { useVisiblePhotosDateRange } from '~/hooks/useVisiblePhotosDateRange'
 
+import { useCanvasUrlSync } from './canvas/useCanvasUrlSync'
+import { useEffectiveViewMode } from './canvas/useEffectiveViewMode'
 import { MasonryView } from './MasonryView'
 import { PageFooter } from './PageFooter'
 import { PageHeader } from './PageHeader'
 
 const ActiveFiltersHero = lazy(() => import('./ActiveFiltersHero').then(m => ({ default: m.ActiveFiltersHero })))
 const ListView = lazy(() => import('./ListView').then(m => ({ default: m.ListView })))
+const CanvasView = lazy(() => import('./canvas/CanvasView').then(m => ({ default: m.CanvasView })))
 
 export const PhotosRoot = () => {
-  const { viewMode } = useAtomValue(gallerySettingAtom)
+  useCanvasUrlSync()
+  const viewMode = useEffectiveViewMode()
   const [showFloatingActions, setShowFloatingActions] = useState(false)
 
   const photos = useContextPhotos()
@@ -25,7 +27,9 @@ export const PhotosRoot = () => {
 
   // 监听滚动，控制浮动组件的显示
   useEffect(() => {
-    if (!scrollElement) return
+    if (!scrollElement) {
+      return
+    }
 
     const handleScroll = () => {
       const { scrollTop } = scrollElement
@@ -39,6 +43,23 @@ export const PhotosRoot = () => {
   }, [scrollElement])
 
   const hasActiveFilters = useHasActiveFilters()
+
+  if (viewMode === 'canvas') {
+    return (
+      <>
+        <PageHeader />
+        {photos.length === 0 && hasActiveFilters ? (
+          <Suspense fallback={null}>
+            <ActiveFiltersHero />
+          </Suspense>
+        ) : (
+          <Suspense fallback={null}>
+            <CanvasView />
+          </Suspense>
+        )}
+      </>
+    )
+  }
 
   return (
     <>
