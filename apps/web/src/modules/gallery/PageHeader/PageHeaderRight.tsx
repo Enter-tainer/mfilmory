@@ -8,7 +8,7 @@ import {
 import { useAtom, useSetAtom } from 'jotai'
 import { lazy, Suspense, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router'
+import { useLocation, useNavigate } from 'react-router'
 
 import { gallerySettingAtom, isCommandPaletteOpenAtom } from '~/atoms/app'
 import { siteConfig } from '~/config'
@@ -25,6 +25,7 @@ export const PageHeaderRight = () => {
   const isMobile = useMobile()
   const [gallerySetting] = useAtom(gallerySettingAtom)
   const setCommandPaletteOpen = useSetAtom(isCommandPaletteOpenAtom)
+  const location = useLocation()
   const navigate = useNavigate()
 
   // 计算视图设置是否有自定义配置
@@ -54,7 +55,7 @@ export const PageHeaderRight = () => {
             <ActionIconButton
               icon="i-mingcute-map-pin-line"
               title={t('action.map.explore')}
-              onClick={() => navigate('/map')}
+              onClick={() => navigate({ pathname: '/map', search: location.search })}
             />
           </div>
         )}

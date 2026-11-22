@@ -171,6 +171,16 @@ export const useContextPhotos = () => {
   return photos
 }
 
+export const getViewerDepth = (state: unknown): number => {
+  if (state !== null && typeof state === 'object' && 'viewerDepth' in state) {
+    const { viewerDepth } = state as { viewerDepth?: unknown }
+    if (typeof viewerDepth === 'number' && Number.isInteger(viewerDepth) && viewerDepth > 0) {
+      return viewerDepth
+    }
+  }
+  return 0
+}
+
 export const usePhotoViewer = () => {
   const photos = usePhotos()
   const navigate = useNavigate()
@@ -210,12 +220,14 @@ export const usePhotoViewer = () => {
       prewarmViewerRoute()
 
       // Navigate to photo URL (creates history entry)
-      navigate(`/photos/${photo.id}${location.search}`)
+      navigate(`/photos/${photo.id}${location.search}`, {
+        state: { viewerDepth: getViewerDepth(location.state) + 1 },
+      })
 
       // 防止背景滚动
       document.body.style.overflow = 'hidden'
     },
-    [photos, navigate, location.search],
+    [photos, navigate, location.search, location.state],
   )
 
   const closeViewer = useCallback(() => {
@@ -226,19 +238,17 @@ export const usePhotoViewer = () => {
       triggerElement: null,
     }))
 
-    // Navigate back to gallery (creates history entry)
-    // Check if we're on the map path to preserve it
-    const isMapPath = location.pathname.includes('/map')
-    if (isMapPath) {
-      navigate(`/map${location.search}`)
+    const depth = getViewerDepth(location.state)
+    if (depth > 0) {
+      navigate(-depth)
     }
     else {
-      navigate(`/${location.search}`)
+      navigate(`/${location.search}`, { replace: true })
     }
 
     // 恢复背景滚动
     document.body.style.overflow = ''
-  }, [navigate, location.search, location.pathname])
+  }, [navigate, location.search, location.state])
 
   const goToIndex = useCallback(
     (index: number) => {
@@ -258,10 +268,12 @@ export const usePhotoViewer = () => {
         prewarmPreviewImage(photo.previewUrl || photo.thumbnailUrl, { priority: 'high' })
 
         // Create history entry for each photo navigation to support browser back/forward
-        navigate(`/photos/${photo.id}${location.search}`)
+        navigate(`/photos/${photo.id}${location.search}`, {
+          state: { viewerDepth: getViewerDepth(location.state) + 1 },
+        })
       }
     },
-    [photos, navigate, location.search, urlPhotoId],
+    [photos, navigate, location.search, location.state, urlPhotoId],
   )
 
   return {
