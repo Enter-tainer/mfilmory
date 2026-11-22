@@ -76,6 +76,9 @@ const useSyncGallerySettingsWithUrl = () => {
   const setGallerySetting = useSetAtom(gallerySettingAtom)
   const { selectedTags, selectedCameras, selectedLenses, selectedRatings, selectedDateRange, tagFilterMode }
     = useAtomValue(gallerySettingAtom)
+  const location = useLocation()
+  const locationStateRef = useRef(location.state)
+  locationStateRef.current = location.state
   const [searchParams, setSearchParams] = useSearchParams()
 
   // Track if initial restore is done
@@ -220,7 +223,7 @@ const useSyncGallerySettingsWithUrl = () => {
 
         return newer
       },
-      { replace: true },
+      { replace: true, state: locationStateRef.current },
     ) // Use replace to avoid polluting history for filter changes
   }, [
     selectedTags,

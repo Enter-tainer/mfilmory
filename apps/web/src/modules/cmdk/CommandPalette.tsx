@@ -6,10 +6,10 @@ import { AnimatePresence, m } from 'motion/react'
 import * as React from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router'
+import { useLocation, useNavigate } from 'react-router'
 
 import { gallerySettingAtom } from '~/atoms/app'
-import { usePhotoViewer } from '~/hooks/usePhotoViewer'
+import { getViewerDepth, usePhotos, usePhotoViewer } from '~/hooks/usePhotoViewer'
 import { MageLens } from '~/icons'
 import { DateRangePicker } from '~/modules/gallery/DateRangePicker'
 import { DATE_RANGE_PRESETS, isPresetActive } from '~/modules/gallery/dateRangeUtils'
@@ -115,7 +115,9 @@ const searchPhotos = (photos: ReturnType<typeof photoLoader.getPhotos>, query: s
 export const CommandPalette = ({ isOpen, onClose }: CommandPaletteProps) => {
   const { t } = useTranslation()
   const [gallerySetting, setGallerySetting] = useAtom(gallerySettingAtom)
+  const location = useLocation()
   const navigate = useNavigate()
+  const filteredPhotos = usePhotos()
   const { openViewer } = usePhotoViewer()
 
   const [query, setQuery] = useState('')
@@ -362,13 +364,32 @@ export const CommandPalette = ({ isOpen, onClose }: CommandPaletteProps) => {
             <img src={photo.thumbnailUrl} alt={photo.title || 'Photo'} className="h-7 w-7 rounded-md object-cover" />
           ),
           action: () => {
-            const allPhotos = photoLoader.getPhotos()
-            const photoIndex = allPhotos.findIndex(p => p.id === photo.id)
-            if (photoIndex !== -1) {
-              openViewer(photoIndex)
-              navigate(`/photos/${photo.id}`)
+            const idx = filteredPhotos.findIndex(p => p.id === photo.id)
+            if (idx !== -1) {
+              openViewer(idx)
               onClose()
+              return
             }
+
+            // Photo is excluded by active filters: clear filter params while keeping other search params
+            const params = new URLSearchParams(location.search)
+            for (const key of ['tags', 'cameras', 'lenses', 'rating', 'tag_mode', 'from', 'to']) {
+              params.delete(key)
+            }
+            setGallerySetting(prev => ({
+              ...prev,
+              selectedTags: [],
+              selectedCameras: [],
+              selectedLenses: [],
+              selectedRatings: null,
+              selectedDateRange: null,
+              tagFilterMode: 'union',
+            }))
+            const search = params.toString()
+            navigate(`/photos/${photo.id}${search ? `?${search}` : ''}`, {
+              state: { viewerDepth: getViewerDepth(location.state) + 1 },
+            })
+            onClose()
           },
           keywords: [photo.title, photo.description, ...locationTokens, ...(photo.tags || [])].filter(
             Boolean,
@@ -382,6 +403,9 @@ export const CommandPalette = ({ isOpen, onClose }: CommandPaletteProps) => {
     t,
     gallerySetting,
     query,
+    filteredPhotos,
+    location.search,
+    location.state,
     navigate,
     onClose,
     setGallerySetting,

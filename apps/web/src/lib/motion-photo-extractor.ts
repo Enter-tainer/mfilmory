@@ -1,7 +1,12 @@
 /**
  * Motion Photo 视频提取工具
- * 从包含嵌入视频的图片中提取 MP4 视频数据
+ * 从包含嵌入视频的图片中提取 MP4 视频数据。
+ *
+ * 提取出的 Blob URL 由模块级 LRU 缓存统一管理与自动回收（`URL.revokeObjectURL`），
+ * 调用方无需也不要手动 revoke，以免影响缓存复用。
  */
+
+import { LRUCache } from './lru-cache'
 
 interface MotionPhotoMetadata {
   motionPhotoOffset: number
@@ -9,13 +14,52 @@ interface MotionPhotoMetadata {
   presentationTimestampUs?: number
 }
 
+const motionPhotoVideoCache = new LRUCache<string, string>(10, (blobUrl) => {
+  if (blobUrl.startsWith('blob:')) {
+    URL.revokeObjectURL(blobUrl)
+  }
+})
+
+const inFlightExtractions = new Map<string, Promise<string | null>>()
+
 /**
- * 从图片 URL 中提取嵌入的 MP4 视频
+ * 从图片 URL 中提取嵌入的 MP4 视频（命中 LRU 缓存或去重并发提取）
  * @param imageUrl 原图片 URL
  * @param metadata Motion Photo 元数据（包含 offset 和可选的 size）
  * @returns 视频的 Blob URL，可直接用于 video 元素
  */
 export async function extractMotionPhotoVideo(imageUrl: string, metadata: MotionPhotoMetadata): Promise<string | null> {
+  const cacheKey = `${imageUrl}#${metadata.motionPhotoOffset}:${metadata.motionPhotoVideoSize ?? ''}`
+
+  const cachedUrl = motionPhotoVideoCache.get(cacheKey)
+  if (cachedUrl) {
+    return cachedUrl
+  }
+
+  const existingPromise = inFlightExtractions.get(cacheKey)
+  if (existingPromise) {
+    return existingPromise
+  }
+
+  const extractionPromise = extractMotionPhotoVideoUncached(imageUrl, metadata)
+    .then((blobUrl) => {
+      if (blobUrl) {
+        motionPhotoVideoCache.set(cacheKey, blobUrl)
+      }
+      return blobUrl
+    })
+    .finally(() => {
+      inFlightExtractions.delete(cacheKey)
+    })
+
+  inFlightExtractions.set(cacheKey, extractionPromise)
+  return extractionPromise
+}
+
+async function extractMotionPhotoVideoUncached(
+  imageUrl: string,
+  metadata: MotionPhotoMetadata,
+): Promise<string | null> {
   try {
     const { motionPhotoOffset, motionPhotoVideoSize } = metadata
 
@@ -26,7 +70,8 @@ export async function extractMotionPhotoVideo(imageUrl: string, metadata: Motion
         if (videoBlob) {
           return URL.createObjectURL(videoBlob)
         }
-      } catch (rangeError) {
+      }
+      catch (rangeError) {
         console.warn('[motion-photo] Range request failed, falling back to full fetch:', rangeError)
       }
     }
@@ -38,7 +83,8 @@ export async function extractMotionPhotoVideo(imageUrl: string, metadata: Motion
     }
 
     return null
-  } catch (error) {
+  }
+  catch (error) {
     console.error('[motion-photo] Failed to extract video:', error)
     return null
   }
@@ -108,23 +154,14 @@ async function isValidMp4(blob: Blob): Promise<boolean> {
 
   for (let i = 0; i <= headerBytes.length - 4; i++) {
     if (
-      headerBytes[i] === ftypSignature[0] &&
-      headerBytes[i + 1] === ftypSignature[1] &&
-      headerBytes[i + 2] === ftypSignature[2] &&
-      headerBytes[i + 3] === ftypSignature[3]
+      headerBytes[i] === ftypSignature[0]
+      && headerBytes[i + 1] === ftypSignature[1]
+      && headerBytes[i + 2] === ftypSignature[2]
+      && headerBytes[i + 3] === ftypSignature[3]
     ) {
       return true
     }
   }
 
   return false
-}
-
-/**
- * 清理由 extractMotionPhotoVideo 创建的 Blob URL
- */
-export function revokeMotionPhotoVideoUrl(blobUrl: string): void {
-  if (blobUrl.startsWith('blob:')) {
-    URL.revokeObjectURL(blobUrl)
-  }
 }

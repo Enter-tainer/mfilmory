@@ -1,7 +1,7 @@
 import { Button } from '@afilmory/ui'
 import { useAtom, useSetAtom } from 'jotai'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router'
+import { useLocation, useNavigate } from 'react-router'
 
 import { gallerySettingAtom, isCommandPaletteOpenAtom } from '~/atoms/app'
 
@@ -12,6 +12,7 @@ export const ActionGroup = () => {
   const { t } = useTranslation()
   const [gallerySetting] = useAtom(gallerySettingAtom)
   const setCommandPaletteOpen = useSetAtom(isCommandPaletteOpenAtom)
+  const location = useLocation()
   const navigate = useNavigate()
 
   // 计算视图设置是否有自定义配置
@@ -49,7 +50,7 @@ export const ActionGroup = () => {
       <Button
         variant="ghost"
         size="sm"
-        onClick={() => navigate('/map')}
+        onClick={() => navigate({ pathname: '/map', search: location.search })}
         className="h-10 w-10 rounded-full border-0 bg-gray-100 transition-colors duration-200 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700"
         title={t('action.map.explore')}
         aria-label={t('action.map.explore')}
