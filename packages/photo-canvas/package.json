@@ -1,0 +1,25 @@
+{
+  "name": "@afilmory/photo-canvas",
+  "type": "module",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Framework-agnostic infinite canvas engine for photo galleries",
+  "license": "MIT",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*"
+  },
+  "main": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "thumbhash": "0.1.1"
+  },
+  "devDependencies": {
+    "vite": "8.3.4",
+    "vitest": "5.0.4"
+  }
+}
