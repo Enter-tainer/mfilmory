@@ -1,6 +1,6 @@
 import { useAtom } from 'jotai'
 import { useEffect, useRef } from 'react'
-import { useSearchParams } from 'react-router'
+import { useLocation, useSearchParams } from 'react-router'
 
 import { gallerySettingAtom } from '~/atoms/app'
 
@@ -10,6 +10,9 @@ import { parseCanvasUrl, writeCanvasUrl } from './url-state'
 export const useCanvasUrlSync = () => {
   const [settings, setSettings] = useAtom(gallerySettingAtom)
   const [arrange, setArrange] = useAtom(canvasArrangeAtom)
+  const location = useLocation()
+  const locationStateRef = useRef(location.state)
+  locationStateRef.current = location.state
   const [searchParams, setSearchParams] = useSearchParams()
   const skipNextWriteRef = useRef(false)
   const search = searchParams.toString()
@@ -37,10 +40,12 @@ export const useCanvasUrlSync = () => {
       skipNextWriteRef.current = false
       return
     }
-    const current = new URLSearchParams(window.location.search)
-    const next = writeCanvasUrl(current, { view: isCanvas ? 'canvas' : null, arrange })
-    if (next.toString() !== current.toString()) {
-      setSearchParams(next, { replace: true })
-    }
+    setSearchParams(
+      (current) => {
+        const next = writeCanvasUrl(current, { view: isCanvas ? 'canvas' : null, arrange })
+        return next.toString() === current.toString() ? current : next
+      },
+      { replace: true, state: locationStateRef.current },
+    )
   }, [isCanvas, arrange, setSearchParams])
 }
